@@ -347,3 +347,6 @@ body:not([data-view=chat]) .src-btn,body:not([data-view=chat]) .model-chip,body:
 
 .btn.ghost{background:transparent;border-color:transparent;color:var(--muted)}
 #webBtn{display:none}#webBtn.on{display:inline-flex}
+
+/* free usage table */
+table.usage{width:100%;border-collapse:collapse;font-size:13px;margin:6px 0}table.usage th,table.usage td{text-align:left;padding:6px 4px;border-bottom:1px solid var(--line,#2a2f3a)}table.usage td:nth-child(2){font-variant-numeric:tabular-nums}

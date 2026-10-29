@@ -21,6 +21,9 @@ export const DEFAULTS = {
   autoFallback: true,              // on daily-limit errors, try the next free Gemini model
   fallbackChain: ['gemini-3.8-flash', 'gemini-3.6-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite', 'gemma-4-26b-a4b-it', 'gemma-4-31b-it'],
   groqModel: 'openai/gpt-oss-120b',
+  webSearch: false,                // 🌐 search the web before answering (Tavily, free)
+  tavilyKey: '', serperKey: '',
+  googleGrounding: false,          // paid Gemini keys only
   openrouterModel: 'google/gemma-4-31b-it:free',
   customBase: '', customModel: '',
   temperature: 1,

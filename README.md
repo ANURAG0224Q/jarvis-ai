@@ -75,12 +75,32 @@ Browsers don't allow sound before you tap, so the first launch ends on a ⏻ *Ta
 ### 🔌 Other AI providers (optional)
 Gemini is the default (free). In Settings you can also use **Groq**, **OpenRouter** (has free models) or any **OpenAI-compatible** endpoint with your own key.
 
-## Free limits (Google's rules)
-Google's free tier gives roughly **20 requests/day** on the best Flash models and **~500/day** on Flash-Lite. Jarvis automatically switches to the next free model when one runs out, and tells you. Google's web-search grounding needs a paid key on Gemini 3 models, so it's off by default. On the free tier, Google may use your prompts to improve its products, so don't paste private information.
+## Free limits and how Jarvis stays free all day
+Google's free tier gives roughly **20 requests/day** on the best Flash models and **~500/day** on Flash-Lite, and resets at midnight Pacific time (12:30 PM IST, or 1:30 PM IST in winter). Jarvis handles this for you:
+
+- **Auto-switch:** when a model hits its daily limit, its per-minute limit, a server error or stops responding, Jarvis moves to the next one: 3.8 Flash → 3.6 Flash → 3.5 Flash-Lite → 3.1 Flash-Lite → Gemma 4 → your backup keys. You see one small note like *“Switched to Gemma 4 26B (daily free limit reached: Gemini 3.8 Flash)”*.
+- **Slow models:** if a model doesn't start answering in time, Jarvis retries once and then moves on.
+- **Backup keys (optional, free, no card):** Settings → AI model → *Backup keys*. A free **Groq** key ([console.groq.com/keys](https://console.groq.com/keys)) adds about 1,000 requests/day per model; a free **OpenRouter** key adds about 50/day.
+- **When everything is used up** you get a friendly message with the reset time, never a raw error.
+- **Settings → 📊 Free usage today** shows how many requests each model and web search used today.
+
+On the free tier, Google may use your prompts to improve its products, so don't paste private information.
+
+## 🌐 Web search (free)
+Turn it on from the **+** menu or **Settings → Web search**. Jarvis searches the web before answering, gives the results to the AI, and shows numbered sources you can tap (the answer cites them as [1], [2]).
+
+- Works **with no key**, using Tavily's free keyless mode (fair-use limited).
+- For more, add a free **Tavily** key ([app.tavily.com](https://app.tavily.com), 1,000 searches/month, no credit card; [Tavily credits](https://docs.tavily.com/documentation/api-credits)).
+- Optional backup: a free **Serper.dev** key (2,500 free Google searches, no card).
+- If search fails, Jarvis still answers and tells you it used its own knowledge.
+- Gemini's own Google Search grounding is paid on Gemini 3 models; there's an advanced switch for it if you ever have a paid key.
+
+## 🎙️ Voice and “Hey Jarvis”
+Works in **Chrome / Edge** (computer or Android); Jarvis checks the browser's features, not its name. In Edge on Windows, turn on *Settings → Privacy & security → Speech → Online speech recognition*. If the mic is blocked, click the 🔒 icon in the address bar → allow microphone. “Hey Jarvis” keeps listening only while the tab is open and on screen. Firefox and Safari don't have speech recognition; there you can still send voice notes with the mic button.
 
 ## Privacy
 - No backend. Your API keys, chats, files and videos are stored only in this browser (localStorage + IndexedDB).
-- Requests go straight from your browser to the AI provider you chose. Web pages you add as sources are read through the free r.jina.ai reader, and AI pictures come from pollinations.ai.
+- Requests go straight from your browser to the AI provider you chose. When web search is on, your question is also sent to Tavily (or Serper if you added that key). Web pages you add as sources are read through the free r.jina.ai reader, and AI pictures come from pollinations.ai.
 - Settings → *Your data* lets you export everything, import it, or delete it.
 
 ## Run it yourself
@@ -96,7 +116,9 @@ index.html, manifest.webmanifest, sw.js   app shell, PWA
 css/app.css                               all styles (dark/light, mobile, print)
 js/app.js        router, onboarding, PWA install
 js/chat.js       chat, sources, voice, browser actions
-js/providers.js  Gemini / Groq / OpenRouter / custom, TTS, images
+js/providers.js  Gemini / Groq / OpenRouter / custom, auto-switch chain, TTS, images
+js/websearch.js  free web search (Tavily keyless/key, Serper backup)
+js/usage.js      “Free usage today” counter
 js/settings.js   settings page
 js/intro.js, js/greeting.js   startup animation + greeting
 js/exam.js       Exam Mode

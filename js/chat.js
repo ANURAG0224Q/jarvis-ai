@@ -2,6 +2,7 @@
 import { $, $$, el, uid, esc, toast, modal, prompt, confirm, copyText, download, pickFiles, fileKind, guessMime, KIND_ICON, fmtBytes, fmtDate, isUrl, youtubeId, blobToDataURL } from './util.js';
 import { settings, saveSettings, convs, blobs, onSettings } from './store.js';
 import { chat as aiChat, friendlyError, providerReady, activeModelLabel, generateImage, readWebPage, geminiTTS } from './providers.js';
+import { webSearch, searchQuery, sourcesBlock } from './websearch.js';
 import { renderMarkdown, typesetMath, extractCode, extFor } from './markdown.js';
 import { openPreview } from './preview.js';
 import { BASE_SYSTEM, PRESETS, presetById, SUGGESTIONS } from './presets.js';
@@ -173,7 +174,7 @@ function renderMsg(m) {
   const body = el('div', { class: 'mbody' });
   if (v.thoughts && settings().showThinking) body.append(el('details', { class: 'thoughts' }, el('summary', {}, '💭 Thoughts'), el('div', { class: 'md', html: renderMarkdown(v.thoughts) })));
   const acts0 = v.actions || extractActions(v.text || '');
-  const md = el('div', { class: 'md' + (v.error ? ' err' : ''), html: v.error ? '' : renderMarkdown(stripActions(v.text || '')) });
+  const md = el('div', { class: 'md' + (v.error ? ' err' : ''), html: v.error ? '' : renderMarkdown(linkCites(stripActions(v.text || ''), v.web)) });
   if (v.error) md.append(el('div', { class: 'error-box' }, '⚠️ ', v.error, ' ', el('button', { class: 'btn tiny', onclick: () => regenerate(m) }, 'Retry'), !providerReady() ? el('button', { class: 'btn tiny', onclick: () => (location.hash = '#/settings') }, 'Settings') : null));
   body.append(md);
   if (v.images && v.images.length) body.append(el('div', { class: 'atts gen' }, v.images.map(attachThumb)));
@@ -184,7 +185,8 @@ function renderMsg(m) {
   const links = [];
   if (g && g.groundingChunks) g.groundingChunks.forEach((c) => c.web && links.push({ uri: c.web.uri, title: c.web.title || c.web.uri }));
   if (g && g.urlContext && g.urlContext.urlMetadata) g.urlContext.urlMetadata.forEach((u) => links.push({ uri: u.retrievedUrl, title: (u.urlRetrievalStatus || '').includes('SUCCESS') ? u.retrievedUrl : `${u.retrievedUrl} (could not open)` }));
-  if (links.length) body.append(el('div', { class: 'cites' }, el('span', { class: 'muted small' }, 'Sources: '), links.slice(0, 8).map((l, i) => el('a', { href: l.uri, target: '_blank', rel: 'noopener', class: 'cite' }, `${i + 1}. ${l.title.slice(0, 50)}`))));
+  if (v.web && v.web.results) v.web.results.forEach((r) => links.push({ uri: r.url, title: r.title || r.url }));
+  if (links.length) body.append(el('div', { class: 'cites' }, el('span', { class: 'muted small' }, v.web ? `🌐 Sources (${v.web.provider}): ` : 'Sources: '), links.slice(0, 10).map((l, i) => el('a', { href: l.uri, target: '_blank', rel: 'noopener', class: 'cite' }, `${i + 1}. ${l.title.slice(0, 50)}`))));
   const acts = el('div', { class: 'msg-actions' });
   if (m.versions && m.versions.length > 1) {
     const i = m.vi ?? m.versions.length - 1;
@@ -281,7 +283,7 @@ export function initChat() {
   $('#plusBtn').addEventListener('click', (e) => popMenu(e.currentTarget, [
     { label: '📎 Attach files / photos', act: async () => addAttachments(await pickFiles({ accept: '' })) },
     { label: '📷 Take a photo', act: async () => addAttachments(await pickFiles({ accept: 'image/*;capture=camera', multiple: false })) },
-    { label: $('#webBtn').classList.contains('on') ? '🌐 Turn web search off' : '🌐 Web search (paid keys only)', act: () => $('#webBtn').click() },
+    { label: $('#webBtn').classList.contains('on') ? '🌐 Turn web search off' : '🌐 Search the web (free)', act: () => $('#webBtn').click() },
     { label: '📚 Add source (file, link, YouTube, GitHub)', act: () => openSources() },
     { label: '🎨 Create an image (free)', act: () => imageDialog() },
     { label: '🎬 Make a video…', act: () => { location.hash = '#/video/ai'; } },
@@ -291,7 +293,8 @@ export function initChat() {
   $('#voiceBar').addEventListener('click', (e) => { if (e.target.closest('#voiceStop')) return setVoiceMode(false); if (!voiceMode) return; if ($('#voiceBar').dataset.state === 'speaking' || $('#voiceBar').dataset.state === 'idle') { stopSpeaking(); listenFails = 0; startListening(true); } });
   setTimeout(startWake, 1000);
   $('#presetSel').addEventListener('change', async (e) => { $('#presetSel').dataset.next = e.target.value; if (conv) { conv.preset = e.target.value; await save(); } const p = presetById(e.target.value, settings().customPresets); toast(`${p.icon || '⭐'} ${p.name} mode`); });
-  $('#webBtn').addEventListener('click', () => { const on = !$('#webBtn').classList.contains('on'); $('#webBtn').classList.toggle('on', on); if (on) toast('Web search on. Note: Google only allows it on paid keys for Gemini 3 models; Jarvis will tell you if it is unavailable.', 'info', 6000); });
+  $('#webBtn').classList.toggle('on', !!settings().webSearch);
+  $('#webBtn').addEventListener('click', () => { const on = !$('#webBtn').classList.contains('on'); $('#webBtn').classList.toggle('on', on); saveSettings({ webSearch: on }); toast(on ? '🌐 Web search on: Jarvis searches the web (free) and shows sources.' : 'Web search off', 'info', 4000); });
   $('#srcBtn').addEventListener('click', openSources);
   $('#chatSearch').addEventListener('input', (e) => refreshList(e.target.value));
   // Drag & drop files anywhere in the chat.
@@ -299,7 +302,7 @@ export function initChat() {
   view.addEventListener('dragover', (e) => { if (e.dataTransfer?.types?.includes('Files')) { e.preventDefault(); view.classList.add('drop'); } });
   view.addEventListener('dragleave', (e) => { if (e.target === view) view.classList.remove('drop'); });
   view.addEventListener('drop', (e) => { e.preventDefault(); view.classList.remove('drop'); addAttachments([...e.dataTransfer.files]); });
-  onSettings((st, patch) => { updateModelChip(); if (patch && 'wakeWord' in patch) { if (patch.wakeWord) startWake(); else stopWake(); } });
+  onSettings((st, patch) => { updateModelChip(); if (patch && 'webSearch' in patch) $('#webBtn').classList.toggle('on', !!patch.webSearch); if (patch && 'wakeWord' in patch) { if (patch.wakeWord) startWake(); else stopWake(); } });
   refreshList();
 }
 
@@ -398,6 +401,15 @@ async function sendInner(textOverride) {
   await runModel(conv.messages.length - 1);
 }
 
+// Turn [1], [2] in an answer into links to the web search results they cite.
+function linkCites(text, web) {
+  if (!web || !web.results || !web.results.length) return text;
+  return text.replace(/\[(\d{1,2}(?:\s*,\s*\d{1,2})*)\](?!\()/g, (m, list) => {
+    const ns = list.split(/\s*,\s*/); if (!ns.every((n) => web.results[+n - 1])) return m;
+    return ns.map((n) => `[[${n}]](${web.results[+n - 1].url})`).join('');
+  });
+}
+
 async function runModel(userIdx, existing = null) {
   const m = existing || { id: uid(), role: 'model', versions: [], vi: 0, ts: Date.now() };
   const v = { text: '', thoughts: '', model: '', notes: [] };
@@ -425,15 +437,34 @@ async function runModel(userIdx, existing = null) {
   const schedule = () => { if (!raf) raf = requestAnimationFrame(paint); };
   try {
     const turns = await buildTurns(userIdx);
+    const webOn = $('#webBtn').classList.contains('on');
+    const searchNotes = [];
+    if (webOn && !settings().googleGrounding) {
+      const q = searchQuery(conv.messages.slice(0, userIdx + 1).filter((x) => x.role === 'user').map((x) => x.text || ''));
+      if (q) {
+        status.textContent = '🔎 Searching the web…';
+        try {
+          const sr = await webSearch(q, { signal: ctrl.signal });
+          const lastUser = [...turns].reverse().find((t) => t.role === 'user');
+          if (lastUser) lastUser.parts.push({ text: sourcesBlock(q, sr) });
+          v.web = { provider: sr.provider, query: q, results: sr.results.map((x) => ({ title: x.title, url: x.url })) };
+          searchNotes.push(...sr.notes);
+          status.textContent = `🌐 Read ${sr.results.length} web results, thinking…`;
+        } catch (e) {
+          if (e.name === 'AbortError') throw e;
+          searchNotes.push(`Web search didn’t work this time (${e.message}), so this answer is from the AI’s own knowledge.`);
+        }
+      }
+    }
     const r = await aiChat(turns, {
-      system: systemPrompt(), signal: ctrl.signal, webSearch: $('#webBtn').classList.contains('on'),
+      system: systemPrompt(), signal: ctrl.signal, webSearch: webOn, googleGrounding: !!settings().googleGrounding,
       onText: (t) => { v.text = t; status.textContent = ''; schedule(); },
       onThought: (t) => { v.thoughts = t; schedule(); },
       onStatus: (s) => { status.textContent = s; },
       onModel: (mm) => { v.model = mm; },
       onUploaded: (f) => { if (f.ref) { f.ref.uri = f.uri; f.ref.uriExpires = f.uriExpires; } },
     });
-    v.text = r.text; v.thoughts = r.thoughts || v.thoughts; v.model = r.model || v.model; v.notes = r.notes || []; v.grounding = r.grounding || null;
+    v.text = r.text; v.thoughts = r.thoughts || v.thoughts; v.model = r.model || v.model; v.notes = [...searchNotes, ...(r.notes || [])]; v.grounding = r.grounding || null;
     if (r.finish === 'MAX_TOKENS') v.notes.push('The answer hit the length limit. Say "continue" to get the rest.');
   } catch (e) {
     if (e.name === 'AbortError') { v.stopped = true; if (!v.text) v.text = ''; }
@@ -448,6 +479,7 @@ async function runModel(userIdx, existing = null) {
     const acts = extractActions(v.text || '');
     if (acts.length && !v.stopped) tryOpen(acts[0]);
     if (voiceMode && v.text) { setVoice('speaking'); speak(stripActions(v.text), null, () => { if (voiceMode) startListening(true); }); } else if (voiceMode) startListening(true);
+    else setTimeout(startWake, 800);
   }
 }
 export function stop() { if (busy) busy.ctrl.abort(); }
@@ -474,6 +506,7 @@ async function runCommand(text, cmd) {
   $('#messages').append(renderMsg(um), renderMsg(m)); scrollBottom(true);
   if (ok) toast(`Opening ${cmd.label}…`);
   else tryOpen(cmd);
+  if (!voiceMode) setTimeout(startWake, 800); // keep listening for “Hey Jarvis” after a command
   if (voiceMode) { setVoice('speaking'); speak(ok ? `Opening ${cmd.label}` : `Tap the button to open ${cmd.label}`, null, () => voiceMode && startListening(true)); }
 }
 
@@ -566,8 +599,17 @@ export async function speak(text, btn, onEnd) {
 export function stopSpeaking() { try { speechSynthesis.cancel(); } catch {} if (audioEl) { audioEl.pause(); audioEl = null; } if (speakingBtn) speakingBtn.textContent = '🔊'; speakingBtn = null; }
 
 let rec = null, recording = null, wakeRec = null, listenFails = 0;
+// Feature detection only (no user-agent checks): Chrome and Edge both expose webkitSpeechRecognition.
 const SR = () => window.SpeechRecognition || window.webkitSpeechRecognition;
 export const speechSupported = () => !!SR();
+let wakeNetFails = 0, wakeTimer = 0, recLang = '';
+const isEdge = () => /\bEdg\//.test(navigator.userAgent) || !!(navigator.userAgentData && navigator.userAgentData.brands.some((b) => /Edge/i.test(b.brand))); // wording only
+function speechLang() { return recLang || settings().voiceLang || 'en-IN'; }
+function netHelp() {
+  return isEdge()
+    ? 'Edge couldn’t reach its online speech service. Check your internet, and on Windows turn on Settings → Privacy & security → Speech → Online speech recognition.'
+    : 'The browser couldn’t reach its online speech service. Check your internet connection. (Voice typing works in Chrome and Edge; Brave and Opera block it.)';
+}
 function setVoice(state) {
   const bar = $('#voiceBar'); if (!bar) return;
   const on = voiceMode || state === 'wake';
@@ -577,7 +619,7 @@ function setVoice(state) {
   $('#voiceModeBtn')?.classList.toggle('on', voiceMode);
 }
 export function setVoiceMode(on) {
-  if (on && !SR()) { toast('Voice chat needs Chrome or Edge: this browser has no speech recognition. You can still record voice notes with the mic.', 'error', 7000); return; }
+  if (on && !SR()) { toast('Voice chat needs Chrome / Edge: this browser has no speech recognition. You can still record voice notes with the mic.', 'error', 7000); return; }
   voiceMode = on; listenFails = 0;
   if (on) { stopWake(); toast('🎧 Voice chat on: speak, Jarvis answers out loud'); if (!busy) startListening(true); else setVoice('thinking'); }
   else { stopListening(); stopSpeaking(); setVoice('off'); toast('Voice chat off'); startWake(); }
@@ -597,11 +639,19 @@ function startListening(autoSend) {
       for (let i = e.resultIndex; i < e.results.length; i++) { const r = e.results[i]; if (r.isFinal) finalText += r[0].transcript; else interim += r[0].transcript; }
       $('#input').value = base + finalText + interim; autoGrow(); updateSendBtn();
     };
-    rec.onerror = (e) => { errored = e.error; if (e.error === 'not-allowed' || e.error === 'service-not-allowed') { toast('Microphone permission denied. Allow the mic for this site in your browser settings.', 'error', 7000); if (voiceMode) { voiceMode = false; setVoice('off'); } } else if (e.error !== 'no-speech' && e.error !== 'aborted') toast('Voice input error: ' + e.error, 'error'); };
+    rec.lang = speechLang();
+    rec.onerror = (e) => {
+      errored = e.error;
+      if (e.error === 'not-allowed' || e.error === 'service-not-allowed') { toast(e.error === 'service-not-allowed' ? 'Speech recognition is turned off in this browser. ' + netHelp() : 'Microphone blocked. Click the 🔒/mic icon in the address bar → Allow microphone, then try again.', 'error', 9000); if (voiceMode) { voiceMode = false; setVoice('off'); } }
+      else if (e.error === 'network') { toast(netHelp(), 'error', 9000); if (voiceMode) { voiceMode = false; setVoice('off'); } }
+      else if (e.error === 'language-not-supported' && speechLang() !== 'en-US') { recLang = 'en-US'; toast('This browser doesn’t support that voice language, switched to English (US).', 'info'); }
+      else if (e.error === 'audio-capture') { toast('No microphone found. Plug one in or check your sound settings.', 'error', 7000); if (voiceMode) { voiceMode = false; setVoice('off'); } }
+      else if (e.error !== 'no-speech' && e.error !== 'aborted') toast('Voice input stopped (' + e.error + '). Tap the mic to try again.', 'error');
+    };
     rec.onend = () => {
       btn.classList.remove('rec'); rec = null;
       if (autoSend && finalText.trim()) { listenFails = 0; if (voiceMode) setVoice('thinking'); send(); return; }
-      if (voiceMode && !busy && errored !== 'not-allowed' && errored !== 'aborted') { if (++listenFails < 8) setTimeout(() => voiceMode && !busy && startListening(true), 300); else { setVoice('idle'); toast('Voice chat paused (no speech heard). Tap the bar to listen again.'); } return; }
+      if (voiceMode && !busy && !['not-allowed', 'service-not-allowed', 'network', 'audio-capture', 'aborted'].includes(errored)) { if (++listenFails < 8) setTimeout(() => voiceMode && !busy && startListening(true), 300); else { setVoice('idle'); toast('Voice chat paused (no speech heard). Tap the bar to listen again.'); } return; }
       if (!voiceMode) startWake();
     };
     rec.start(); btn.classList.add('rec');
@@ -614,12 +664,13 @@ export function startWake() {
   if (!settings().wakeWord || voiceMode || rec || wakeRec || !SR() || document.hidden) return;
   try {
     const Rec = SR(); const r = new Rec(); wakeRec = r;
-    r.lang = settings().voiceLang || 'en-IN'; r.continuous = true; r.interimResults = false;
+    r.lang = speechLang(); r.continuous = true; r.interimResults = false;
+    let werr = '';
     r.onresult = (e) => {
       for (let i = e.resultIndex; i < e.results.length; i++) {
         if (!e.results[i].isFinal) continue;
         const said = e.results[i][0].transcript;
-        const m = /\b(?:hey|hi|hello|ok|okay)[\s,]+jarvis\b[\s,.!]*(.*)$/i.exec(said);
+        const m = matchWake(said);
         if (m) {
           stopWake();
           const rest = m[1].trim();
@@ -629,12 +680,30 @@ export function startWake() {
         }
       }
     };
-    r.onerror = (e) => { if (e.error === 'not-allowed' || e.error === 'service-not-allowed') { toast('“Hey Jarvis” needs microphone permission.', 'error'); wakeRec = null; } };
-    r.onend = () => { const was = wakeRec === r; wakeRec = null; if (was) setTimeout(startWake, 400); };
+    r.onresult = ((orig) => (e) => { wakeNetFails = 0; orig(e); })(r.onresult);
+    r.onerror = (e) => {
+      werr = e.error;
+      if (e.error === 'not-allowed' || e.error === 'service-not-allowed') { toast('“Hey Jarvis” needs the microphone. Click the 🔒/mic icon in the address bar → Allow, then turn it on again in Settings.', 'error', 9000); wakeRec = null; setVoice('off'); }
+      else if (e.error === 'audio-capture') { toast('“Hey Jarvis”: no microphone found.', 'error'); wakeRec = null; setVoice('off'); }
+      else if (e.error === 'language-not-supported' && speechLang() !== 'en-US') recLang = 'en-US';
+      else if (e.error === 'network') wakeNetFails++;
+    };
+    // Chrome and Edge end continuous recognition on their own (silence, ~60 s, network blips): restart it.
+    r.onend = () => {
+      const was = wakeRec === r; wakeRec = null;
+      if (!was) return;
+      if (werr === 'network' && wakeNetFails >= 4) { setVoice('off'); toast('“Hey Jarvis” paused: ' + netHelp(), 'error', 10000); wakeNetFails = 0; return; }
+      const delay = werr === 'network' ? Math.min(1500 * 2 ** wakeNetFails, 8000) : 300;
+      clearTimeout(wakeTimer); wakeTimer = setTimeout(startWake, delay);
+    };
     r.start(); setVoice('wake');
   } catch { wakeRec = null; }
 }
-export function stopWake() { const r = wakeRec; wakeRec = null; try { r && r.abort(); } catch {} if (!voiceMode) setVoice('off'); }
+export function stopWake() { clearTimeout(wakeTimer); const r = wakeRec; wakeRec = null; try { r && r.abort(); } catch {} if (!voiceMode) setVoice('off'); }
+// Edge and Chrome hear "Jarvis" in a few ways; accept the common mishearings.
+export function matchWake(said) {
+  return /\b(?:hey|hi|hello|ok|okay|hay|he)[\s,]+(?:jarvis|jarvi|jarves|jervis|javis|jarvees|charvis)\b[\s,.!?]*(.*)$/i.exec(String(said || ''));
+}
 document.addEventListener('visibilitychange', () => { if (document.hidden) stopWake(); else startWake(); });
 async function recordVoiceNote() {
   // Browsers without speech recognition: record a voice note and send it to the AI as audio.

@@ -1,13 +1,14 @@
 import { $, el, toast, confirm, download, pickFiles, uid, fmtBytes, modal, prompt } from './util.js';
 import { settings, saveSettings, GEMINI_MODELS, GEMINI_VOICES, GROQ_MODELS, convs, blobs, usage, resetSettings } from './store.js';
-import { testGeminiKey, openRouterFreeModels, friendlyError, geminiTTS } from './providers.js';
+import { testGeminiKey, openRouterFreeModels, friendlyError, geminiTTS, modelLabel } from './providers.js';
+import { usageToday, resetLabel, resetUsage } from './usage.js';
 import { PRESETS } from './presets.js';
 import { pickGreeting, speak, precache, state as gstate } from './greeting.js';
 import { runIntro } from './intro.js';
 import { refreshList } from './chat.js';
 import { blobToBase64, base64ToBlob } from './util.js';
 
-export const APP_VERSION = '1.0.0';
+export const APP_VERSION = '1.1.0';
 
 function field(label, input, help) { return el('label', { class: 'field' }, el('span', { class: 'flabel' }, label), input, help ? el('small', { class: 'muted' }, help) : null); }
 function toggle(key, label, help) {
@@ -62,7 +63,11 @@ export function renderSettings() {
       field('Gemini API key', keyInput('geminiKey', 'AIza…'), 'Stored only in this browser. It is sent only to Google.'),
       el('div', { class: 'row' }, testBtn, status),
       field('Model', modelSel, 'Gemini 3.8 Flash is the smartest free model but allows only about 20 messages a day. Flash-Lite models allow about 500.'),
-      toggle('autoFallback', 'Auto-switch model when the daily limit is hit', 'Tries 3.8 Flash → 3.6 Flash → 3.5 Flash-Lite → 3.1 Flash-Lite → Gemma 4, so chat keeps working.'),
+      toggle('autoFallback', 'Auto-switch model when a limit is hit', 'Tries 3.8 Flash → 3.6 Flash → 3.5 Flash-Lite → 3.1 Flash-Lite → Gemma 4, then your backup keys below, so chat keeps working all day.'),
+      el('details', { class: 'adv', id: 'backupKeys' }, el('summary', {}, 'Backup keys (free, optional): more chats per day'),
+        el('p', { class: 'small muted' }, 'When every free Gemini model hits its daily limit, Jarvis switches to these. Both are free with no card.'),
+        field('Groq API key', keyInput('groqKey', 'gsk_…'), el('span', {}, 'Free at ', el('a', { href: 'https://console.groq.com/keys', target: '_blank', rel: 'noopener' }, 'console.groq.com/keys'), ': very fast, about 1,000 requests/day per model.')),
+        field('OpenRouter API key', keyInput('openrouterKey', 'sk-or-…'), el('span', {}, 'Free at ', el('a', { href: 'https://openrouter.ai/keys', target: '_blank', rel: 'noopener' }, 'openrouter.ai/keys'), ': free “:free” models, about 50 requests/day.'))),
       el('p', { class: 'privacy' }, '🔒 Privacy: on Google’s free tier, your prompts may be used to improve Google’s products (outside the EU/UK). Don’t paste passwords or private data.'),
       el('details', { class: 'adv' }, el('summary', {}, 'Advanced'),
         field('Custom Gemini endpoint (optional)', bindInput(el('input', { type: 'url', placeholder: 'https://generativelanguage.googleapis.com', id: 'set-geminiBase' }), 'geminiBase', (v) => v.trim()), 'Only change this if you use your own proxy. Leave empty normally.')));
@@ -192,9 +197,32 @@ export function renderSettings() {
   const gv = el('select', {}); GEMINI_VOICES.forEach((v) => gv.append(el('option', { value: v }, v))); gv.value = s.geminiVoice; gv.addEventListener('change', () => saveSettings({ geminiVoice: gv.value }));
   const lang = el('select', {}, ...[['en-IN', 'English (India)'], ['en-US', 'English (US)'], ['hi-IN', 'Hindi'], ['kn-IN', 'Kannada'], ['ta-IN', 'Tamil'], ['te-IN', 'Telugu'], ['mr-IN', 'Marathi'], ['bn-IN', 'Bengali']].map(([v, l]) => el('option', { value: v }, l)));
   lang.value = s.voiceLang || 'en-IN'; lang.addEventListener('change', () => saveSettings({ voiceLang: lang.value }));
-  wrap.append(section('🎙️ Voice', toggle('wakeWord', '“Hey Jarvis” wake phrase', 'Listens for “Hey Jarvis” while this tab is open and on screen, then takes your command. Uses the microphone continuously; needs Chrome or Edge. Off by default.'),
-    el('p', { class: 'small muted' }, 'Voice chat: tap 🎧 next to the message box. Jarvis listens, answers out loud, then listens again. Tap the voice bar to interrupt.'),
+  wrap.append(section('🎙️ Voice', toggle('wakeWord', '“Hey Jarvis” wake phrase', 'Listens for “Hey Jarvis” while this tab is open and on screen, then takes your command. Uses the microphone continuously. Works in Chrome / Edge (on a computer or Android). Off by default.'),
+    el('p', { class: 'small muted' }, 'Voice chat: tap 🎧 next to the message box. Jarvis listens, answers out loud, then listens again. Tap the voice bar to interrupt. Works in Chrome / Edge. In Edge on Windows, “Online speech recognition” must be on (Windows Settings → Privacy & security → Speech).'),
     field('Read-aloud engine', eng), field('Browser voice', vSel), field('Gemini voice', el('div', { class: 'row' }, gv, el('button', { class: 'btn', onclick: async (e) => { const b = e.currentTarget; b.disabled = true; try { const w = await geminiTTS('Hi! I am Jarvis, your AI assistant.', { voice: gv.value }); new Audio(URL.createObjectURL(new Blob([w], { type: 'audio/wav' }))).play(); } catch (err) { toast(friendlyError(err), 'error'); } b.disabled = false; } }, '▶ Try'))), field('Voice typing language', lang)));
+
+  // ---------- Web search ----------
+  wrap.append(section('🌐 Web search',
+    toggle('webSearch', 'Search the web (free)', 'Jarvis searches the web before answering, gives the results to the AI and shows numbered sources. Works with no key (free, with a fair-use limit). You can also turn it on per chat from the + menu.'),
+    field('Tavily API key (optional)', keyInput('tavilyKey', 'tvly-…'), el('span', {}, 'For more searches: free key at ', el('a', { href: 'https://app.tavily.com', target: '_blank', rel: 'noopener' }, 'app.tavily.com'), ' (sign in with Google, 1,000 searches/month, no card).')),
+    el('details', { class: 'adv' }, el('summary', {}, 'Backup search & advanced'),
+      field('Serper.dev key (optional backup, Google results)', keyInput('serperKey', 'key'), el('span', {}, 'Free at ', el('a', { href: 'https://serper.dev', target: '_blank', rel: 'noopener' }, 'serper.dev'), ': 2,500 free searches, no card. Used only if Tavily fails.')),
+      toggle('googleGrounding', 'Use Gemini’s own Google Search instead', 'Only for paid Gemini keys: Google charges for Search grounding on Gemini 3 models. Leave off on a free key.'))));
+
+  // ---------- Free usage today ----------
+  const useBox = el('div', { id: 'usageBox' });
+  const drawUse = () => {
+    useBox.innerHTML = '';
+    const u = usageToday(); const names = Object.keys(u.n).concat(Object.keys(u.lim).filter((k) => !(k in u.n)));
+    const cap = (k) => /flash-lite/.test(k) ? '~500' : /gemini-3/.test(k) ? '~20' : /^groq:/.test(k) ? '~1,000' : /^openrouter:/.test(k) ? '~50' : /tavily-keyless/.test(k) ? 'fair use' : /search:tavily/.test(k) ? '1,000/month' : '';
+    const nice = (k) => k.startsWith('search:') ? { 'search:tavily': 'Web search (Tavily key)', 'search:tavily-keyless': 'Web search (free, no key)', 'search:serper': 'Web search (Serper)', 'search:mock': 'Web search (test)' }[k] || k : modelLabel(k.includes(':') ? { p: k.split(':')[0], model: k.split(':').slice(1).join(':') } : { p: 'gemini', model: k });
+    if (!names.length) useBox.append(el('p', { class: 'muted small' }, 'No requests yet today.'));
+    else useBox.append(el('table', { class: 'usage' }, el('tr', {}, el('th', {}, 'Model / service'), el('th', {}, 'Used'), el('th', {}, 'Free limit')),
+      names.map((k) => el('tr', {}, el('td', {}, nice(k)), el('td', {}, String(u.n[k] || 0)), el('td', {}, u.lim[k] ? el('span', { class: 'bad' }, 'reached') : cap(k))))));
+    useBox.append(el('p', { class: 'muted small' }, `Counted in this browser. Google’s daily free limits reset at ${resetLabel()}. When one model runs out, Jarvis switches to the next automatically.`));
+  };
+  drawUse();
+  wrap.append(section('📊 Free usage today', useBox, el('div', { class: 'row' }, el('button', { class: 'btn', onclick: drawUse }, 'Refresh'), el('button', { class: 'btn', onclick: () => { resetUsage(); drawUse(); } }, 'Reset counter'))));
 
   // ---------- Browser actions ----------
   wrap.append(section('🧭 Browser actions',

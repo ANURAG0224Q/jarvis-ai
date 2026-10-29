@@ -1,19 +1,21 @@
 // AI providers. Everything runs in the browser with the user's own keys.
-import { settings } from './store.js';
+import { settings, GEMINI_MODELS } from './store.js';
 import { blobToBase64, sleep } from './util.js';
+import { bumpUsage, markLimit, resetLabel } from './usage.js';
 
 export const GEMINI_ORIGIN = 'https://generativelanguage.googleapis.com';
 export const INLINE_MAX = 14 * 1024 * 1024; // bigger files go through the Gemini Files API
 
 export class AIError extends Error {
-  constructor(message, { status = 0, kind = 'error', retryIn = null, raw = '' } = {}) { super(message); this.status = status; this.kind = kind; this.retryIn = retryIn; this.raw = raw; }
+  constructor(message, { status = 0, kind = 'error', retryIn = null, raw = '', friendly = '' } = {}) { super(message); this.status = status; this.kind = kind; this.retryIn = retryIn; this.raw = raw; this.friendly = friendly; }
 }
 
 const isMock = () => !!(window.__JARVIS_MOCK || sessionStorage.getItem('jarvis.mock') === '1');
 export function geminiBase() { const b = (settings().geminiBase || '').trim().replace(/\/+$/, ''); return b || GEMINI_ORIGIN; }
-export function providerReady(p = settings().provider) {
+export function providerReady(p) {
   if (isMock()) return true;
   const s = settings();
+  if (p === undefined) return buildRoutes().length > 0;
   return !!({ gemini: s.geminiKey || s.geminiBase, groq: s.groqKey, openrouter: s.openrouterKey, custom: s.customBase && s.customModel }[p]);
 }
 export function activeModelLabel() {
@@ -46,13 +48,19 @@ export function friendlyError(e) {
   if (e instanceof TypeError && /fetch|network/i.test(e.message)) return 'Network error: check your internet connection (or the endpoint URL in Settings).';
   switch (e.kind) {
     case 'bad-key': return 'Your API key was rejected. Open Settings and paste a valid key.';
-    case 'daily-limit': return `Daily free limit reached for this model${e.retryIn ? ` (resets in ${e.retryIn})` : ''}. Pick another model in Settings, or turn on auto-fallback.`;
+    case 'all-limits': case 'all-busy': return e.friendly;
+    case 'no-key': return e.message;
+    case 'daily-limit': return `Daily free limit reached for this model. It resets at ${resetLabel()}. Turn on auto-switch in Settings, or add a free Groq key there for more.`;
+    case 'timeout': return 'The AI took too long to answer. Tap Retry.';
     case 'rate-limit': return `Too many requests per minute on the free tier${e.retryIn ? `, retry in ${e.retryIn}` : ''}. Wait a moment and try again.`;
-    case 'not-found': return `Model not found: ${e.message}`;
-    case 'server': return `The AI service had a problem (${e.status}). Try again in a moment.`;
+    case 'not-found': return 'That model isn’t available on your key. Pick another model in Settings.';
+    case 'server': return 'The AI service had a hiccup. Try again in a moment.';
+    case 'forbidden': return 'Your key isn’t allowed to use this model. Pick another model in Settings.';
     case 'blocked': return e.message;
   }
-  return e.message || String(e);
+  if (e.status === 400) return 'The AI couldn’t handle this request (maybe a file type it can’t read). Try removing attachments or rephrasing.';
+  if (e instanceof AIError && e.kind === 'error' && e.message && e.message.length < 140 && !/[{}]/.test(e.message)) return e.message;
+  return 'Something went wrong getting an answer. Tap Retry.';
 }
 
 // ---------- SSE reader ----------
@@ -138,22 +146,23 @@ function geminiBody({ contents, system, tools, temperature, thinking, showThinki
   if (temperature != null) body.generationConfig.temperature = temperature;
   if (maxTokens) body.generationConfig.maxOutputTokens = maxTokens;
   const tc = {};
-  if (showThinking) tc.includeThoughts = true;
+  tc.includeThoughts = true; // always stream thoughts: keeps slow models visibly alive (hidden when showThinking is off)
   if (thinking && thinking !== 'default') tc.thinkingLevel = thinking;
   if (Object.keys(tc).length) body.generationConfig.thinkingConfig = tc;
   if (json) { body.generationConfig.responseMimeType = 'application/json'; if (schema) body.generationConfig.responseSchema = schema; }
   return body;
 }
 
-async function geminiStreamOnce(model, body, { signal, onText, onThought }) {
+async function geminiStreamOnce(model, body, { signal, onText, onThought, onChunk, showThinking = true }) {
   const res = await fetch(`${geminiBase()}/v1beta/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`, {
     method: 'POST', headers: geminiHeaders(), body: JSON.stringify(body), signal,
   });
   if (!res.ok) throw await parseError(res);
   let text = '', thoughts = '', finish = '', grounding = null, usage = null, block = '';
   for await (const data of sse(res, signal)) {
+    onChunk && onChunk();
     let j; try { j = JSON.parse(data); } catch { continue; }
-    if (j.error) throw new AIError(j.error.message || 'Stream error', { status: j.error.code || 0 });
+    if (j.error) throw new AIError(j.error.message || 'Stream error', { status: j.error.code || 0, kind: (j.error.code || 0) >= 500 ? 'server' : j.error.code === 429 ? 'rate-limit' : 'error' });
     if (j.promptFeedback && j.promptFeedback.blockReason) block = j.promptFeedback.blockReason;
     if (j.usageMetadata) usage = j.usageMetadata;
     const c = j.candidates && j.candidates[0];
@@ -163,13 +172,13 @@ async function geminiStreamOnce(model, body, { signal, onText, onThought }) {
     if (c.urlContextMetadata) grounding = { ...(grounding || {}), urlContext: c.urlContextMetadata };
     for (const part of (c.content && c.content.parts) || []) {
       if (typeof part.text !== 'string') continue;
-      if (part.thought) { thoughts += part.text; onThought && onThought(thoughts); }
+      if (part.thought) { thoughts += part.text; if (showThinking) onThought && onThought(thoughts); else onChunk && onChunk(); }
       else { text += part.text; onText && onText(text); }
     }
   }
   if (!text && block) throw new AIError(`Google blocked this request (${block}). Try rephrasing.`, { kind: 'blocked' });
   if (!text && finish && !['STOP', 'MAX_TOKENS'].includes(finish)) throw new AIError(`The model stopped without an answer (${finish}).`, { kind: 'blocked' });
-  return { text, thoughts, finish, grounding, usage, model };
+  return { text, thoughts: showThinking ? thoughts : '', finish, grounding, usage, model };
 }
 
 // ---------- OpenAI-compatible (Groq, OpenRouter, custom) ----------
@@ -197,8 +206,8 @@ async function toOaiContent(parts) {
   if (out.every((c) => c.type === 'text')) return out.map((c) => c.text).join('\n\n');
   return out;
 }
-async function oaiStream(turns, { system, signal, onText, onThought, temperature, json }) {
-  const cfg = oaiConfig();
+async function oaiStream(turns, { system, signal, onText, onThought, onChunk, temperature, json, cfg: cfgIn }) {
+  const cfg = cfgIn || oaiConfig();
   if (!cfg.base) throw new AIError('Set the endpoint URL for the custom provider in Settings.');
   const messages = [];
   if (system) messages.push({ role: 'system', content: system });
@@ -214,6 +223,7 @@ async function oaiStream(turns, { system, signal, onText, onThought, temperature
   let text = '', thoughts = '', finish = '', usage = null;
   for await (const data of sse(res, signal)) {
     if (data === '[DONE]') break;
+    onChunk && onChunk();
     let j; try { j = JSON.parse(data); } catch { continue; }
     if (j.error) throw new AIError(j.error.message || 'Stream error');
     if (j.usage) usage = j.usage;
@@ -241,66 +251,195 @@ function markExhausted(model, retryIn) { const x = exhaustedMap(); x[model] = Da
 function clearExhausted(model) { const x = exhaustedMap(); if (x[model]) { delete x[model]; try { localStorage.setItem(EXH_KEY, JSON.stringify(x)); } catch {} } }
 
 // ---------- Public: chat ----------
+// Free-tier reliability: every request walks a chain of "routes" (provider + model). A daily limit, a per-minute
+// limit, a 5xx or a model that stops responding moves on to the next route automatically, with a small note.
+const GROQ_BACKUPS = ['openai/gpt-oss-120b', 'llama-3.3-70b-versatile', 'openai/gpt-oss-20b', 'llama-3.1-8b-instant'];
+export const PROVIDER_NAMES = { gemini: 'Gemini', groq: 'Groq', openrouter: 'OpenRouter', custom: 'Custom' };
+export function modelLabel(r) {
+  if (!r) return '';
+  if (r.p === 'gemini' || !r.p) { const m = GEMINI_MODELS.find((x) => x.id === r.model); return m ? m.label : r.model; }
+  return `${r.model.replace(/:free$/, '')} (${PROVIDER_NAMES[r.p]})`;
+}
+const exKey = (r) => (r.p === 'gemini' ? r.model : `${r.p}:${r.model}`);
+export function buildRoutes(o = {}) {
+  const s = settings();
+  if (o.model) return [{ p: 'gemini', model: o.model }];
+  const lists = {
+    gemini: (s.geminiKey || s.geminiBase) ? [s.model, ...(s.autoFallback ? s.fallbackChain : [])] : [],
+    groq: s.groqKey ? [s.groqModel, ...(s.autoFallback ? GROQ_BACKUPS : [])] : [],
+    openrouter: s.openrouterKey ? [s.openrouterModel] : [],
+    custom: s.customBase && s.customModel ? [s.customModel] : [],
+  };
+  const order = [s.provider, ...(s.autoFallback ? ['gemini', 'groq', 'openrouter'] : [])];
+  const routes = [];
+  for (const p of order) for (const model of lists[p] || []) if (model && !routes.some((r) => r.p === p && r.model === model)) routes.push({ p, model });
+  return routes;
+}
+function oaiCfgFor(r) {
+  const s = settings();
+  if (r.p === 'groq') return { base: 'https://api.groq.com/openai/v1', key: s.groqKey, model: r.model };
+  if (r.p === 'openrouter') return { base: 'https://openrouter.ai/api/v1', key: s.openrouterKey, model: r.model, extra: { 'HTTP-Referer': location.origin, 'X-Title': 'Jarvis AI' } };
+  return { base: (s.customBase || '').replace(/\/+$/, ''), key: s.customKey, model: r.model };
+}
+const hasMedia = (turns) => turns.some((t) => t.parts.some((p) => p.youtube || (p.file && !['image', 'pdf'].includes(p.file.kind))));
+
+export function isLooping(t) {
+  const tail = t.slice(-1500).toLowerCase().split(/[^a-z0-9\u0900-\u0dff]+/).filter(Boolean);
+  if (tail.length < 120) return false;
+  return new Set(tail).size / tail.length < 0.12;
+}
+// Runs one attempt with a watchdog: no first data within firstMs, or silence for idleMs, counts as a timeout.
+async function guarded(fn, o, { firstMs, idleMs, maxMs = 300e3 }) {
+  const ac = new AbortController(); let timedOut = false, timer = 0;
+  const cap = setTimeout(() => { timedOut = true; ac.abort(); }, maxMs); // a model stuck in a loop can't hold the app forever
+  const arm = (ms) => { clearTimeout(timer); timer = setTimeout(() => { timedOut = true; ac.abort(); }, ms); };
+  const outer = o.signal; const fwd = () => ac.abort();
+  if (outer) { if (outer.aborted) ac.abort(); else outer.addEventListener('abort', fwd, { once: true }); }
+  arm(firstMs);
+  const kick = () => arm(idleMs);
+  let partial = '', looped = false, checkedAt = 0;
+  const onText = (t) => {
+    partial = t; kick();
+    // A model stuck repeating itself ("weight, weight, weight…") is stopped and the next one is tried.
+    if (t.length - checkedAt > 1500) { checkedAt = t.length; if (isLooping(t)) { looped = true; ac.abort(); return; } }
+    o.onText && o.onText(t);
+  };
+  try {
+    return await fn({ ...o, signal: ac.signal, onChunk: kick, onText, onThought: (t) => { kick(); if (t.length - checkedAt > 1500) { checkedAt = t.length; if (isLooping(t)) { looped = true; ac.abort(); return; } } o.onThought && o.onThought(t); } });
+  } catch (e) {
+    if (outer && outer.aborted) throw e;
+    if (looped) { const err = new AIError('The model got stuck repeating itself.', { kind: 'timeout' }); err.looped = true; throw err; }
+    if (timedOut) { const err = new AIError('The model stopped responding.', { kind: 'timeout' }); err.partial = partial; throw err; }
+    if (partial) e.partial = partial;
+    throw e;
+  } finally { clearTimeout(timer); clearTimeout(cap); if (outer) outer.removeEventListener('abort', fwd); }
+}
+
 // turns: [{role:'user'|'model', parts:[neutral parts]}]
 export async function chat(turns, opts = {}) {
   const s = settings();
   const o = { temperature: s.temperature, thinking: s.thinking, showThinking: s.showThinking, ...opts };
-  if (isMock()) return mockReply(turns, o);
-  if (s.provider !== 'gemini') return oaiStream(turns, o);
-  if (!s.geminiKey && !s.geminiBase) throw new AIError('Add your free Gemini API key in Settings first.', { kind: 'bad-key' });
-
-  const ctx = { links: [], signal: o.signal, onStatus: o.onStatus, onUploaded: o.onUploaded };
-  const contents = [];
-  for (const t of turns) contents.push({ role: t.role === 'model' ? 'model' : 'user', parts: await toGeminiParts(t.parts, ctx) });
-  const tools = [];
-  if (o.webSearch) tools.push({ googleSearch: {} });
-  if (ctx.links.length && o.urlContext !== false) tools.push({ urlContext: {} });
-
-  const first = o.model || s.model;
-  let chain = [first];
-  if (s.autoFallback && !o.model) for (const m of s.fallbackChain) if (!chain.includes(m)) chain.push(m);
-  let lastErr = null, notes = [];
-  // Skip models whose daily free limit is known to be used up (remembered until Google's reset), but keep them as a last resort.
-  if (chain.length > 1) {
+  if (isMock()) return mockChat(turns, o);
+  let routes = buildRoutes(o);
+  if (!routes.length) throw new AIError('Add your free Gemini API key in Settings first.', { kind: 'no-key' });
+  // Files only Gemini can read (video, audio): keep Gemini routes first.
+  if (hasMedia(turns) && routes.some((r) => r.p === 'gemini')) routes = [...routes.filter((r) => r.p === 'gemini'), ...routes.filter((r) => r.p !== 'gemini')];
+  const notes = [];
+  // Skip routes whose daily free limit is known to be used up (until Google's reset), but keep them as a last resort.
+  if (routes.length > 1) {
     const ex = exhaustedMap(), now = Date.now();
-    const skip = chain.filter((m) => ex[m] > now);
-    if (skip.length && skip.length < chain.length) { chain = [...chain.filter((m) => !(ex[m] > now)), ...skip]; const said = 'jarvis.exhNote.' + skip.join(','); if (!sessionStorage.getItem(said)) { sessionStorage.setItem(said, '1'); notes.push(`${skip.join(', ')}: daily free limit used up for today, using ${chain[0]} until it resets.`); } }
+    const skip = routes.filter((r) => ex[exKey(r)] > now);
+    if (skip.length && skip.length < routes.length) {
+      routes = [...routes.filter((r) => !(ex[exKey(r)] > now)), ...skip];
+      const said = 'jarvis.exhNote.' + skip.map(exKey).join(',');
+      if (!sessionStorage.getItem(said)) { sessionStorage.setItem(said, '1'); notes.push(`Daily free limit already used today for ${skip.map(modelLabel).join(', ')}, so Jarvis is using ${modelLabel(routes[0])} (resets ${resetLabel()}).`); }
+    }
   }
-  for (const model of chain) {
-    let body = geminiBody({ contents, system: o.system, tools, temperature: o.temperature, thinking: o.thinking, showThinking: o.showThinking, json: o.json, schema: o.schema, maxTokens: o.maxTokens });
-    for (let attempt = 0; attempt < 3; attempt++) {
+  let geminiCtx = null, contents = null;
+  const errors = [];
+  for (let i = 0; i < routes.length; i++) {
+    const route = routes[i]; const last = i === routes.length - 1;
+    const slow = /gemma/i.test(route.model);
+    const limits = { firstMs: last ? 150e3 : slow ? 75e3 : 45e3, idleMs: last ? 150e3 : 60e3, maxMs: o.maxMs || (last ? 420e3 : 300e3) };
+    let lastErr = null;
+    let body = null;
+    if (route.p === 'gemini') {
+      if (!contents) {
+        geminiCtx = { links: [], signal: o.signal, onStatus: o.onStatus, onUploaded: o.onUploaded };
+        contents = [];
+        for (const t of turns) contents.push({ role: t.role === 'model' ? 'model' : 'user', parts: await toGeminiParts(t.parts, geminiCtx) });
+      }
+      const tools = [];
+      if (o.webSearch && o.googleGrounding) tools.push({ googleSearch: {} });
+      if (geminiCtx.links.length && o.urlContext !== false) tools.push({ urlContext: {} });
+      const gemma = /gemma/i.test(route.model);
+      body = geminiBody({ contents, system: gemma && o.json ? `${o.system || ''} Reply with one valid JSON object only, no Markdown fences.${o.schema ? ' It must match this JSON schema exactly (same top-level keys): ' + JSON.stringify(o.schema) : ''}`.trim() : o.system, tools, temperature: gemma && o.json ? Math.min(o.temperature ?? 1, 0.4) : o.temperature, thinking: o.thinking, showThinking: o.showThinking, json: o.json && !gemma, schema: o.schema, maxTokens: o.maxTokens });
+    }
+    let retried = false;
+    for (let attempt = 0; attempt < 4; attempt++) {
       try {
-        o.onModel && o.onModel(model);
-        const r = await geminiStreamOnce(model, body, o);
-        r.notes = notes;
-        clearExhausted(model);
+        o.onModel && o.onModel(route.p === 'gemini' ? route.model : modelLabel(route));
+        const r = route.p === 'gemini'
+          ? await guarded((oo) => geminiStreamOnce(route.model, body, oo), o, limits)
+          : await guarded((oo) => oaiStream(turns, { ...oo, cfg: oaiCfgFor(route) }), o, limits);
+        r.notes = [...compactNotes(notes), ...(r.notes || [])];
+        if (route.p !== 'gemini') r.model = modelLabel(route);
+        clearExhausted(exKey(route)); bumpUsage(exKey(route));
         return r;
       } catch (e) {
-        if (e.name === 'AbortError') throw e;
+        if (e.name === 'AbortError' && !(e instanceof AIError)) throw e;
         lastErr = e;
-        // Some models don't support every option: drop it and retry the same model.
-        if (e.status === 400 && body.generationConfig.thinkingConfig && /think/i.test(e.message)) { delete body.generationConfig.thinkingConfig; continue; }
-        if (e.status === 400 && body.tools && /tool|search|url|grounding|function/i.test(e.message)) {
-          notes.push(o.webSearch ? 'Web search is not available for this model/key (Google Search grounding needs a paid key on Gemini 3+), answered without it.' : 'This model could not open links directly; answered from the text Jarvis fetched.');
-          delete body.tools; continue;
+        // Text already on screen: keep it instead of starting over with another model.
+        if (e.partial && e.partial.length > 200) return { text: e.partial, thoughts: '', model: route.p === 'gemini' ? route.model : modelLabel(route), notes: [...notes, 'The model stopped mid-answer. Say "continue" for the rest.'] };
+        if (route.p === 'gemini') {
+          // Some models don't support every option: drop it and retry the same model.
+          if (e.status === 400 && body.generationConfig.thinkingConfig && /think/i.test(e.message)) { delete body.generationConfig.thinkingConfig; continue; }
+          if (e.status === 400 && body.tools && /tool|search|url|grounding|function/i.test(e.message)) {
+            notes.push(o.webSearch && o.googleGrounding ? 'Google Search grounding needs a paid key on Gemini 3+, so Jarvis answered without it.' : 'This model could not open links directly; answered from the text Jarvis fetched.');
+            delete body.tools; continue;
+          }
+          if (e.status === 400 && body.generationConfig.responseSchema && /schema|json/i.test(e.message)) { delete body.generationConfig.responseSchema; continue; }
+          if (e.status === 400 && body.systemInstruction && /system|developer instruction/i.test(e.message)) {
+            body.contents = [{ role: 'user', parts: [{ text: `Instructions:\n${body.systemInstruction.parts[0].text}` }] }, { role: 'model', parts: [{ text: 'Understood.' }] }, ...body.contents];
+            delete body.systemInstruction; continue;
+          }
         }
-        if (e.status === 400 && body.generationConfig.responseSchema && /schema|json/i.test(e.message)) { delete body.generationConfig.responseSchema; continue; }
-        if (e.status === 400 && body.systemInstruction && /system|developer instruction/i.test(e.message)) {
-          // Gemma models: move the system prompt into the first user turn.
-          body.contents = [{ role: 'user', parts: [{ text: `Instructions:\n${body.systemInstruction.parts[0].text}` }] }, { role: 'model', parts: [{ text: 'Understood.' }] }, ...body.contents];
-          delete body.systemInstruction; continue;
-        }
-        if (e.kind === 'server' && attempt < 1) { await sleep(1500); continue; }
+        // One retry for a hiccup (5xx, timeout, connection drop), or a short per-minute wait.
+        const netErr = e instanceof TypeError;
+        if (!retried && !e.looped && (e.kind === 'server' || e.kind === 'timeout' || netErr)) { retried = true; o.onStatus && o.onStatus(`${modelLabel(route)} is slow, retrying…`); await sleep(1500); continue; }
+        if (!retried && e.kind === 'rate-limit' && parseDur(e.retryIn) && parseDur(e.retryIn) <= 15e3) { retried = true; o.onStatus && o.onStatus(`Free per-minute limit, waiting ${Math.ceil(parseDur(e.retryIn) / 1000)} s…`); await sleep(parseDur(e.retryIn) + 300); continue; }
         break;
       }
     }
-    if (lastErr && lastErr.kind === 'daily-limit') markExhausted(model, lastErr.retryIn);
-    const canFallback = lastErr && (['daily-limit', 'rate-limit', 'not-found', 'server'].includes(lastErr.kind));
-    if (!canFallback) break;
-    const next = chain[chain.indexOf(model) + 1];
-    if (next) { notes.push(`${model}: ${lastErr.kind === 'daily-limit' ? 'daily free limit reached' : lastErr.kind === 'not-found' ? 'not available' : 'busy'} → switched to ${next}.`); o.onStatus && o.onStatus(`Switching to ${next}…`); }
+    errors.push({ route, err: lastErr });
+    if (lastErr && lastErr.kind === 'daily-limit') { markExhausted(exKey(route), lastErr.retryIn); markLimit(exKey(route)); }
+    const moveOn = lastErr && (['daily-limit', 'rate-limit', 'not-found', 'server', 'timeout', 'bad-key', 'forbidden'].includes(lastErr.kind) || lastErr instanceof TypeError || lastErr.status === 400 && route.p !== 'gemini');
+    if (!moveOn) break;
+    const next = routes[i + 1];
+    if (next) {
+      const why = { 'daily-limit': 'daily free limit reached', 'rate-limit': 'too many requests this minute', 'not-found': 'not available', timeout: lastErr.looped ? 'got stuck repeating itself' : 'not responding', 'bad-key': 'key rejected', forbidden: 'not allowed' }[lastErr.kind] || 'busy';
+      notes.push(`Switched to ${modelLabel(next)} (${modelLabel(route)}: ${why}).`);
+      o.onStatus && o.onStatus(`Switching to ${modelLabel(next)}…`);
+    }
   }
-  throw lastErr || new AIError('No model answered.');
+  throw allFailedError(errors);
+}
+
+// Several "Switched to …" notes in a row become one line: "Switched to Gemma 4 26B (daily free limit reached on: A, B, C)."
+function compactNotes(notes) {
+  const sw = notes.map((n) => /^Switched to (.+) \((.+): (.+)\)\.$/.exec(n));
+  if (sw.filter(Boolean).length < 2) return notes;
+  const hits = sw.filter(Boolean); const final = hits[hits.length - 1][1];
+  const byWhy = {}; hits.forEach((h) => { (byWhy[h[3]] = byWhy[h[3]] || []).push(h[2]); });
+  const why = Object.entries(byWhy).map(([w, ms]) => `${w}: ${ms.join(', ')}`).join('; ');
+  return [...notes.filter((n, i) => !sw[i]), `Switched to ${final} (${why}).`];
+}
+
+function allFailedError(errors) {
+  const s = settings();
+  const kinds = errors.map((x) => x.err && x.err.kind);
+  const last = errors.length ? errors[errors.length - 1].err : null;
+  if (errors.length === 1 && last && !['daily-limit', 'rate-limit', 'server', 'timeout'].includes(last.kind)) return last;
+  if (kinds.every((k) => k === 'bad-key')) return new AIError('key', { kind: 'bad-key' });
+  const more = !s.groqKey ? ' Add a free Groq key in Settings (AI model → Backup keys) for more chats today.' : !s.openrouterKey ? ' Add a free OpenRouter key in Settings (AI model → Backup keys) for more.' : '';
+  if (kinds.includes('daily-limit') && kinds.every((k) => ['daily-limit', 'rate-limit', 'not-found', 'bad-key', 'forbidden'].includes(k)))
+    return new AIError('limits', { kind: 'all-limits', friendly: `Daily free limit reached on all your free models. It resets at ${resetLabel()}.${more}` });
+  return new AIError('busy', { kind: 'all-busy', friendly: `All free AI models are busy right now. Wait a minute and tap Retry.${more}` });
+}
+
+async function mockChat(turns, o) {
+  // Test hook: window.__JARVIS_MOCK_FAIL = ['daily-limit', 'server', ...] makes the first routes fail like the real API.
+  const fails = window.__JARVIS_MOCK_FAIL || [];
+  const routes = window.__JARVIS_MOCK_ROUTES || ['gemini-3.8-flash', 'gemini-3.5-flash-lite', 'gemma-4-26b-a4b-it'];
+  const notes = [];
+  for (let i = 0; i < routes.length; i++) {
+    const f = fails[i];
+    o.onModel && o.onModel(routes[i]);
+    if (!f) { bumpUsage(routes[i]); const r = await mockReply(turns, o); r.model = routes[i]; r.notes = [...compactNotes(notes), ...(r.notes || [])]; return r; }
+    if (f === 'daily-limit') { markLimit(routes[i]); }
+    if (routes[i + 1]) notes.push(`Switched to ${modelLabel({ p: 'gemini', model: routes[i + 1] })} (${modelLabel({ p: 'gemini', model: routes[i] })}: ${f === 'daily-limit' ? 'daily free limit reached' : f === 'timeout' ? 'not responding' : 'busy'}).`);
+    else return Promise.reject(allFailedError(fails.slice(0, routes.length).map((k) => ({ err: new AIError(k, { kind: k }) }))));
+  }
 }
 
 // One-shot JSON generation helper (used by the AI video maker).

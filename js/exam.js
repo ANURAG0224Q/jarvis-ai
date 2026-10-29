@@ -105,8 +105,12 @@ Guidelines: MCQ 1–2 marks with exactly 4 options and "answer" = the index (0-3
   let j = null, lastErr = null;
   for (let attempt = 0; attempt < 2 && !j; attempt++) {
     try {
-      const r = await chat([{ role: 'user', parts }], { json: true, schema: SCHEMA, system: 'You are an expert examiner and teacher. Output only JSON.', showThinking: false, temperature: 0.7 });
-      const p = parseJSONLoose(r.text);
+      const st = $('#exGenerate');
+      const r = await chat([{ role: 'user', parts }], { json: true, schema: SCHEMA, system: 'You are an expert examiner and teacher. Output only JSON.', showThinking: false, temperature: 0.7, maxTokens: 16000, maxMs: 240e3,
+        onModel: (m) => { if (st) st.textContent = `⏳ Writing your paper with ${m}…`; }, onStatus: (s) => { if (st) st.textContent = '⏳ ' + s; },
+        onText: (t) => { if (st) st.textContent = `⏳ Writing your paper… ${Math.round(t.length / 100) / 10}k characters`; } });
+      let p = parseJSONLoose(r.text);
+      if (p && !p.questions) { const inner = Object.values(p).find((v) => v && typeof v === 'object' && Array.isArray(v.questions)); if (inner) p = inner; }
       const qs = (p.questions || []).map((q) => ({ ...q, type: String(q.type || '').toLowerCase() })).filter((q) => validQuestion(q, cfg.types));
       if (qs.length) j = { title: p.title, questions: qs };
       else lastErr = new Error('The AI paper had no valid questions. Trying again…');
