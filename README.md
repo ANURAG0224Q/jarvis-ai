@@ -1,5 +1,7 @@
 # Jarvis AI 🤖
 
+> **Note:** This project was made by AI for educational purposes. It was not made by me (ANURAG).
+
 Your own free AI assistant that runs completely in your browser. Chat, code, build websites and games, read your files, PDFs, links and YouTube videos, make AI videos up to 10 minutes long, edit videos, and practise with AI exam papers. It installs on your phone like an app.
 
 **Live app:** https://anurag0224q.github.io/jarvis-ai/
