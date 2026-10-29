@@ -175,7 +175,7 @@ function renderMsg(m) {
   if (v.thoughts && settings().showThinking) body.append(el('details', { class: 'thoughts' }, el('summary', {}, '💭 Thoughts'), el('div', { class: 'md', html: renderMarkdown(v.thoughts) })));
   const acts0 = v.actions || extractActions(v.text || '');
   const md = el('div', { class: 'md' + (v.error ? ' err' : ''), html: v.error ? '' : renderMarkdown(linkCites(stripActions(v.text || ''), v.web)) });
-  if (v.error) md.append(el('div', { class: 'error-box' }, '⚠️ ', v.error, ' ', el('button', { class: 'btn tiny', onclick: () => regenerate(m) }, 'Retry'), !providerReady() ? el('button', { class: 'btn tiny primary add-key-btn', onclick: () => (location.hash = '#/settings') }, '🔑 Add free key') : null));
+  if (v.error) md.append(el('div', { class: 'error-box' }, '⚠️ ', v.error, ' ', el('button', { class: 'btn tiny', onclick: () => regenerate(m) }, 'Retry'), !providerReady() ? el('button', { class: 'btn tiny primary add-key-btn', onclick: () => (location.hash = '#/settings') }, '🔑 Add free key') : /Settings/.test(v.error) ? el('button', { class: 'btn tiny', onclick: () => (location.hash = '#/settings') }, '⚙️ Settings') : null));
   body.append(md);
   if (v.images && v.images.length) body.append(el('div', { class: 'atts gen' }, v.images.map(attachThumb)));
   if (acts0.length) body.append(el('div', { class: 'action-btns' }, acts0.map((a) => el('a', { class: 'btn primary open-btn', href: a.url, target: '_blank', rel: 'noopener noreferrer' }, '↗ Open ' + a.label))));

@@ -1,6 +1,6 @@
 // Jarvis service worker. Online: always loads the newest files (network first), so updates arrive cleanly
 // and files from different versions are never mixed. Offline: falls back to the saved copy. AI calls always go to the network.
-const VERSION = '5737b49237';
+const VERSION = '3b0dac381d';
 const CACHE = 'jarvis-' + VERSION;
 const FILES = ["./", "./css/app.css", "./icons/icon-192.png", "./icons/icon-512.png", "./icons/icon.svg", "./icons/maskable-512.png", "./icons/og.png", "./js/app.js", "./js/chat.js", "./js/commands.js", "./js/connectors.js", "./js/exam-core.js", "./js/exam.js", "./js/github.js", "./js/greeting.js", "./js/intro.js", "./js/markdown.js", "./js/mock.js", "./js/pdftext.js", "./js/presets.js", "./js/preview.js", "./js/providers.js", "./js/settings.js", "./js/store.js", "./js/usage.js", "./js/util.js", "./js/video/aimaker.js", "./js/video/editor.js", "./js/video/engine.js", "./js/video/scenes.js", "./js/video/studio.js", "./js/video/timing.js", "./js/websearch.js", "./lib/hljs.js", "./lib/jszip.min.js", "./lib/marked.js", "./lib/mediabunny.js", "./lib/purify.js", "./manifest.webmanifest"];
 const NET_TIMEOUT_MS = 6000;
