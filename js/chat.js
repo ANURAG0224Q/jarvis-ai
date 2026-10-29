@@ -175,7 +175,7 @@ function renderMsg(m) {
   if (v.thoughts && settings().showThinking) body.append(el('details', { class: 'thoughts' }, el('summary', {}, '💭 Thoughts'), el('div', { class: 'md', html: renderMarkdown(v.thoughts) })));
   const acts0 = v.actions || extractActions(v.text || '');
   const md = el('div', { class: 'md' + (v.error ? ' err' : ''), html: v.error ? '' : renderMarkdown(linkCites(stripActions(v.text || ''), v.web)) });
-  if (v.error) md.append(el('div', { class: 'error-box' }, '⚠️ ', v.error, ' ', el('button', { class: 'btn tiny', onclick: () => regenerate(m) }, 'Retry'), !providerReady() ? el('button', { class: 'btn tiny', onclick: () => (location.hash = '#/settings') }, 'Settings') : null));
+  if (v.error) md.append(el('div', { class: 'error-box' }, '⚠️ ', v.error, ' ', el('button', { class: 'btn tiny', onclick: () => regenerate(m) }, 'Retry'), !providerReady() ? el('button', { class: 'btn tiny primary add-key-btn', onclick: () => (location.hash = '#/settings') }, '🔑 Add free key') : null));
   body.append(md);
   if (v.images && v.images.length) body.append(el('div', { class: 'atts gen' }, v.images.map(attachThumb)));
   if (acts0.length) body.append(el('div', { class: 'action-btns' }, acts0.map((a) => el('a', { class: 'btn primary open-btn', href: a.url, target: '_blank', rel: 'noopener noreferrer' }, '↗ Open ' + a.label))));
@@ -245,7 +245,8 @@ async function downloadCode(text) {
 export function autoGrow() { const t = $('#input'); t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight, innerHeight * 0.4) + 'px'; }
 export function updateSendBtn() {
   const btn = $('#sendBtn'); if (!btn) return;
-  if (busy) { btn.classList.add('stop'); btn.innerHTML = '■'; btn.title = 'Stop'; btn.setAttribute('aria-label', 'Stop generating'); btn.disabled = false; return; }
+  if (busy && !$('#input').value.trim()) { btn.classList.add('stop'); btn.innerHTML = '■'; btn.title = 'Stop'; btn.setAttribute('aria-label', 'Stop generating'); btn.disabled = false; return; }
+  if (busy) { btn.classList.remove('stop'); btn.innerHTML = '➤'; btn.title = 'Send'; btn.setAttribute('aria-label', 'Send message'); btn.disabled = false; return; }
   btn.classList.remove('stop'); btn.innerHTML = '➤'; btn.title = 'Send'; btn.setAttribute('aria-label', 'Send message');
   btn.disabled = lock || !($('#input').value.trim() || pending.length);
 }
@@ -279,7 +280,7 @@ export function initChat() {
     const files = [...(e.clipboardData?.files || [])];
     if (files.length) { e.preventDefault(); addAttachments(files); }
   });
-  $('#sendBtn').addEventListener('click', () => (busy ? stop() : send()));
+  $('#sendBtn').addEventListener('click', () => (busy && !$('#input').value.trim() ? stop() : send()));
   $('#plusBtn').addEventListener('click', (e) => popMenu(e.currentTarget, [
     { label: '📎 Attach files / photos', act: async () => addAttachments(await pickFiles({ accept: '' })) },
     { label: '📷 Take a photo', act: async () => addAttachments(await pickFiles({ accept: 'image/*;capture=camera', multiple: false })) },
@@ -355,6 +356,9 @@ async function buildTurns(uptoIdx) {
   for (let i = start; i < msgs.length; i++) {
     const m = msgs[i];
     if (m.role === 'user') {
+      // A question that never got an answer (error, stopped, no key) is left out, so the AI doesn't answer an old question instead of the new one.
+      const nx = msgs[i + 1];
+      if (i !== lastUser && nx && nx.role === 'model') { const nv = curVer(nx); if (nv.error || !nv.text) continue; }
       const parts = [];
       if (i === lastUser) parts.push(...(await sourceParts()));
       for (const a of m.attachments || []) parts.push(await attParts(a));
@@ -373,19 +377,59 @@ async function buildTurns(uptoIdx) {
 }
 
 let lock = false;
+let queued = null; // a message typed while Jarvis was still answering: sent right after
 export async function send(textOverride) {
-  if (busy || lock) return;
-  lock = true;
-  try { await sendInner(textOverride); } finally { lock = false; updateSendBtn(); }
-}
-async function sendInner(textOverride) {
   const input = $('#input');
-  const text = (textOverride ?? input.value).trim();
+  const text = String(textOverride ?? input.value).trim();
   if (!text && !pending.length) return;
+  // Simple "open youtube"-type commands run instantly, never wait for the AI (even while it is answering).
+  let cmd = null;
+  try { cmd = !pending.length && parseCommand(text); } catch (e) { console.warn('command parse', e); }
+  if (cmd) {
+    if (textOverride == null) { input.value = ''; autoGrow(); updateSendBtn(); }
+    try { await runCommand(text, cmd); } catch (e) { console.error(e); await localReply(text, null, 'Something went wrong while opening that: ' + (e.message || e) + '. Tap the button to open it.', [cmd]); }
+    return;
+  }
+  if (busy || lock) {
+    if (pending.length) { toast('Jarvis is still answering. Send your files when it finishes (or tap ■ to stop).', 'info', 5000); return; }
+    queued = text;
+    if (textOverride == null) { input.value = ''; autoGrow(); }
+    toast('⏳ Jarvis is still answering. Your message will send right after.', 'info', 5000);
+    updateSendBtn(); return;
+  }
+  lock = true;
+  try { await sendInner(text); }
+  catch (e) {
+    console.error('send failed', e);
+    busy = null;
+    await localReply(null, null, 'Something went wrong on my side: ' + (e && e.message ? e.message : e) + '. Please tap Retry or send it again.').catch(() => toast('Something went wrong: ' + (e && e.message), 'error', 8000));
+  } finally { lock = false; updateSendBtn(); setTimeout(flushQueue, 250); }
+}
+function flushQueue() { if (queued && !busy && !lock) { const q = queued; queued = null; send(q); } }
+
+/** Add a reply that doesn't need the AI (commands, "add your key", errors). Always visible. */
+async function localReply(userText, text, error = null, actions = null) {
+  await ensureConv();
+  const add = [];
+  if (userText != null) { const um = { id: uid(), role: 'user', text: userText, attachments: [], ts: Date.now() }; if (!conv.messages.length) conv.title = userText.replace(/\s+/g, ' ').slice(0, 60); add.push(um); }
+  const m = { id: uid(), role: 'model', versions: [{ text: text || '', error: error || undefined, actions: actions || undefined, model: actions ? 'browser action' : 'Jarvis', notes: [], local: true }], vi: 0, ts: Date.now() };
+  add.push(m);
+  conv.messages.push(...add);
+  try { await save(); setTitle(); refreshList(); } catch (e) { console.warn('save', e); }
+  if ($('#messages .empty')) $('#messages').innerHTML = '';
+  $('#messages').append(...add.map(renderMsg)); scrollBottom(true);
+  return m;
+}
+async function sendInner(text) {
+  const input = $('#input');
   if (/^\/image\s+/i.test(text)) { input.value = ''; autoGrow(); updateSendBtn(); return createImage(text.replace(/^\/image\s+/i, '')); }
-  const cmd = !pending.length && parseCommand(text);
-  if (cmd) { input.value = ''; autoGrow(); updateSendBtn(); return runCommand(text, cmd); }
-  if (!providerReady()) { toast('Add your free Gemini API key first.', 'error'); location.hash = '#/settings'; return; }
+  if (!providerReady()) {
+    // Never drop the message: show it, and explain what's needed right in the chat.
+    if (pending.length) { pending = []; renderPending(); }
+    input.value = ''; autoGrow(); updateSendBtn();
+    await localReply(text, '', NO_KEY_MSG);
+    return;
+  }
   await ensureConv();
   const atts = [];
   for (const p of pending) { const blobId = 'b_' + uid(); await blobs.put(blobId, p.blob); atts.push({ id: p.id, name: p.name, mime: p.mime, size: p.size, kind: p.kind, blobId }); }
@@ -400,6 +444,9 @@ async function sendInner(textOverride) {
   scrollBottom(true);
   await runModel(conv.messages.length - 1);
 }
+
+const FIRST_WORDS_CAP_MS = 180e3;
+const NO_KEY_MSG = 'To answer questions I need your free Gemini key. It takes 1 minute: tap “🔑 Add free key”, then tap Retry. (Opening sites works without a key: try “open youtube”.)';
 
 // Turn [1], [2] in an answer into links to the web search results they cite.
 function linkCites(text, web) {
@@ -435,6 +482,17 @@ async function runModel(userIdx, existing = null) {
     scrollBottom();
   };
   const schedule = () => { if (!raf) raf = requestAnimationFrame(paint); };
+  // Always show signs of life: a ticking status while we wait for the first words, and a hard cap so it never hangs.
+  const t0 = Date.now(); let lastStatus = ''; let gaveUp = false;
+  const tick = setInterval(() => {
+    if (v.text) return;
+    const s = Math.round((Date.now() - t0) / 1000); if (s < 4) return;
+    let label = ''; try { label = activeModelLabel(); } catch {}
+    const base = (lastStatus || (label ? `Thinking with ${label}` : 'Thinking')).replace(/[….\s]+$/, '');
+    status.textContent = `${base}… ${s}s` + (s >= 25 ? ' · free AI models can be slow at busy times, tap ■ to stop' : '');
+  }, 1000);
+  const capMs = window.__JARVIS_FIRST_CAP_MS || FIRST_WORDS_CAP_MS;
+  const capTimer = setTimeout(() => { if (!v.text) { gaveUp = true; ctrl.abort(); } }, capMs);
   try {
     const turns = await buildTurns(userIdx);
     const webOn = $('#webBtn').classList.contains('on');
@@ -460,16 +518,18 @@ async function runModel(userIdx, existing = null) {
       system: systemPrompt(), signal: ctrl.signal, webSearch: webOn, googleGrounding: !!settings().googleGrounding,
       onText: (t) => { v.text = t; status.textContent = ''; schedule(); },
       onThought: (t) => { v.thoughts = t; schedule(); },
-      onStatus: (s) => { status.textContent = s; },
+      onStatus: (s) => { lastStatus = s || ''; status.textContent = s; },
       onModel: (mm) => { v.model = mm; },
       onUploaded: (f) => { if (f.ref) { f.ref.uri = f.uri; f.ref.uriExpires = f.uriExpires; } },
     });
     v.text = r.text; v.thoughts = r.thoughts || v.thoughts; v.model = r.model || v.model; v.notes = [...searchNotes, ...(r.notes || [])]; v.grounding = r.grounding || null;
     if (r.finish === 'MAX_TOKENS') v.notes.push('The answer hit the length limit. Say "continue" to get the rest.');
   } catch (e) {
-    if (e.name === 'AbortError') { v.stopped = true; if (!v.text) v.text = ''; }
-    else { console.warn('AI error', e); v.error = friendlyError(e); }
+    if (gaveUp && !v.text) v.error = `The free AI didn’t answer in ${capMs >= 120e3 ? Math.round(capMs / 60000) + ' minutes' : Math.round(capMs / 1000) + ' seconds'} (its servers are slow or busy right now). Tap Retry, or try again in a few minutes.`;
+    else if (e && e.name === 'AbortError') { v.stopped = true; if (!v.text) v.text = ''; }
+    else { console.warn('AI error', e); let fe = ''; try { fe = friendlyError(e); } catch {} v.error = fe || ('Something went wrong: ' + (e && e.message ? e.message : e)); }
   } finally {
+    clearInterval(tick); clearTimeout(capTimer);
     if (raf) cancelAnimationFrame(raf);
     busy = null; updateSendBtn();
     if (!v.text && v.stopped && !v.thoughts) { v.error = 'Stopped before any answer.'; delete v.stopped; }
@@ -480,6 +540,7 @@ async function runModel(userIdx, existing = null) {
     if (acts.length && !v.stopped) tryOpen(acts[0]);
     if (voiceMode && v.text) { setVoice('speaking'); speak(stripActions(v.text), null, () => { if (voiceMode) startListening(true); }); } else if (voiceMode) startListening(true);
     else setTimeout(startWake, 800);
+    setTimeout(flushQueue, 300);
   }
 }
 export function stop() { if (busy) busy.ctrl.abort(); }
@@ -496,16 +557,11 @@ function tryOpen(a) {
 async function runCommand(text, cmd) {
   // Open first, while the tap/Enter still counts as a user action (avoids popup blockers).
   const ok = openTab(cmd.url);
-  await ensureConv();
-  const um = { id: uid(), role: 'user', text, attachments: [], ts: Date.now() };
-  if (!conv.messages.length) conv.title = text.slice(0, 60);
-  const m = { id: uid(), role: 'model', versions: [{ text: ok ? `Opening **${cmd.label}** in a new tab ↗` : `Your browser blocked the new tab. Tap the button to open **${cmd.label}**.`, actions: [{ url: cmd.url, label: cmd.label }], model: 'browser action', notes: [] }], vi: 0, ts: Date.now() };
-  conv.messages.push(um, m);
-  await save(); setTitle(); refreshList();
-  if ($('#messages .empty')) $('#messages').innerHTML = '';
-  $('#messages').append(renderMsg(um), renderMsg(m)); scrollBottom(true);
-  if (ok) toast(`Opening ${cmd.label}…`);
-  else tryOpen(cmd);
+  const all = [{ url: cmd.url, label: cmd.label }, ...(cmd.more || []).map((a) => ({ url: a.url, label: a.label }))];
+  const extra = all.length > 1 ? ' Tap the other buttons to open the rest.' : '';
+  const reply = ok ? `Opening **${cmd.label}**… ↗ If it didn’t open, tap the button below.${extra}` : `Tap the button to open **${cmd.label}** (your browser blocked the pop-up).${extra}`;
+  await localReply(text, reply, null, all);
+  if (!ok) { const t = toast(el('span', {}, 'Your browser blocked the new tab. ', el('a', { class: 'btn primary tiny', href: cmd.url, target: '_blank', rel: 'noopener noreferrer', id: 'popupFallback', onclick: () => t.remove() }, `↗ Open ${cmd.label}`)), 'info', 15000); }
   if (!voiceMode) setTimeout(startWake, 800); // keep listening for “Hey Jarvis” after a command
   if (voiceMode) { setVoice('speaking'); speak(ok ? `Opening ${cmd.label}` : `Tap the button to open ${cmd.label}`, null, () => voiceMode && startListening(true)); }
 }

@@ -42,7 +42,7 @@ Add **files** (PDF, images, text, code, audio, video), **links** (web pages are 
 - Optional **“Hey Jarvis”** wake phrase (Settings → Voice, off by default). It only listens while the tab is open and on screen, and needs Chrome or Edge.
 
 ### 🧭 Browser actions
-Say or type things like **“open YouTube”**, **“open Gmail”**, **“search YouTube for lofi”**, **“play Believer on YouTube”**, **“google best laptops under 50k”**. Jarvis opens them in a **new tab**. If your browser blocks pop-ups, Jarvis shows a button to tap instead (Settings → Browser actions explains how to allow pop-ups). A website can't control other apps on your phone or computer, so Jarvis only opens tabs.
+Say or type things like **“open YouTube”**, **“can u open youtube”**, **“youtube kholo”**, **“open YouTube and play lofi music”**, **“open Gmail”**, **“search YouTube for lofi”**, **“play Believer on Spotify”**, **“google best laptops under 50k”**. These are handled instantly on your device (no AI wait, and no key needed): Jarvis replies right away and opens a **new tab**, with a **↗ Open** button under the reply. If your browser blocks pop-ups, Jarvis shows a button to tap instead (Settings → Browser actions explains how to allow pop-ups). A website can't control other apps on your phone or computer, so Jarvis only opens tabs.
 
 ### 🎬 AI Video Maker
 Type a topic, pick a length **from 10 seconds to 10 minutes** (you choose the exact length and the video comes out exactly that long), a shape (16:9 YouTube, 9:16 Reels/Shorts, 1:1) and a style. Jarvis writes a script you can edit scene by scene. You can also write your own. Then it adds:
@@ -134,3 +134,9 @@ test/            unit tests (node --test)
 Built with [marked](https://github.com/markedjs/marked) (MIT), [DOMPurify](https://github.com/cure53/DOMPurify) (Apache-2.0/MPL-2.0), [highlight.js](https://highlightjs.org/) (BSD-3), [JSZip](https://stuk.github.io/jszip/) (MIT), [Mediabunny](https://mediabunny.dev/) (MPL-2.0), [PDF.js](https://mozilla.github.io/pdf.js/) (Apache-2.0) and [KaTeX](https://katex.org/) (MIT). The AI comes from Google Gemini through your own key. The intro animation is original artwork, not affiliated with any film studio.
 
 MIT License © 2026 Anurag
+
+## If something seems stuck
+
+- Every message gets a reply: an answer, or a clear message (no key yet, daily free limit with its reset time, network, or the free AI being too slow). If the AI hasn't started answering after 3 minutes, Jarvis stops waiting and shows **Retry**.
+- A message typed while Jarvis is still answering is sent right after (open commands run immediately).
+- After an update, the app loads the newest version automatically. If it ever shows **“Jarvis didn’t load properly”**, tap **Fix & reload**.

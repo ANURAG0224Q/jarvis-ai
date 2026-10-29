@@ -83,6 +83,28 @@
   </aside>
 </div>
 <noscript>Jarvis needs JavaScript.</noscript>
+<script>
+/* Load guard: if the app's code fails to start (for example an old cached copy), show a fix button instead of a dead screen. */
+(function () {
+  var shown = false;
+  function fix() {
+    var p = [];
+    try { if (navigator.serviceWorker) p.push(navigator.serviceWorker.getRegistrations().then(function (rs) { return Promise.all(rs.map(function (r) { return r.unregister(); })); })); } catch (e) {}
+    try { if (window.caches) p.push(caches.keys().then(function (ks) { return Promise.all(ks.map(function (k) { return caches.delete(k); })); })); } catch (e) {}
+    Promise.all(p).catch(function () {}).then(function () { location.reload(); });
+  }
+  window.__jarvisFix = fix;
+  function bad(msg) {
+    if (shown || window.__jarvisReady) return; shown = true;
+    var d = document.createElement('div'); d.id = 'loadFail'; d.setAttribute('role', 'alert');
+    d.style.cssText = 'position:fixed;left:12px;right:12px;bottom:16px;z-index:99999;background:#151a24;color:#fff;border:1px solid #f59e0b;border-radius:14px;padding:14px 16px;font:15px/1.4 system-ui,sans-serif;box-shadow:0 8px 30px rgba(0,0,0,.45)';
+    d.innerHTML = '<b>Jarvis didn\u2019t load properly.</b><br>An old copy may be stuck in your browser.<br><button id="loadFix" style="margin-top:10px;padding:10px 16px;border-radius:10px;border:0;background:#22d3ee;color:#00121a;font-weight:700;font-size:15px">Fix &amp; reload</button>' + (msg ? '<div style="opacity:.6;font-size:12px;margin-top:8px">' + String(msg).replace(/[<&]/g, ' ').slice(0, 160) + '</div>' : '');
+    document.body.appendChild(d); document.getElementById('loadFix').onclick = fix;
+  }
+  window.addEventListener('error', function (e) { if (e && e.message && !window.__jarvisReady) setTimeout(function () { bad(e.message); }, 4000); });
+  window.addEventListener('load', function () { setTimeout(function () { bad(''); }, 12000); });
+})();
+</script>
 <script type="module" src="js/app.js"></script>
 </body>
 </html>

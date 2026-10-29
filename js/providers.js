@@ -432,6 +432,10 @@ async function mockChat(turns, o) {
   const fails = window.__JARVIS_MOCK_FAIL || [];
   const routes = window.__JARVIS_MOCK_ROUTES || ['gemini-3.8-flash', 'gemini-3.5-flash-lite', 'gemma-4-26b-a4b-it'];
   const notes = [];
+  // Test hooks: __JARVIS_MOCK_HANG = never answers (until stopped); __JARVIS_MOCK_FIRST_DELAY = ms before the first words.
+  const abortable = (ms) => new Promise((res, rej) => { const t = ms == null ? null : setTimeout(res, ms); o.signal && o.signal.addEventListener('abort', () => { clearTimeout(t); rej(new DOMException('Aborted', 'AbortError')); }); });
+  if (window.__JARVIS_MOCK_HANG) await abortable(null);
+  if (window.__JARVIS_MOCK_FIRST_DELAY) await abortable(window.__JARVIS_MOCK_FIRST_DELAY);
   for (let i = 0; i < routes.length; i++) {
     const f = fails[i];
     o.onModel && o.onModel(routes[i]);

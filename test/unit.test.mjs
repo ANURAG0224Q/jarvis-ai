@@ -1,4 +1,4 @@
-// Unit tests for the pure parts of Jarvis. Run: node --test test/
+// Unit tests for the pure parts of Jarvis. Run: npm test
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { rebalance, gradeLocal } from '../js/exam-core.js';
