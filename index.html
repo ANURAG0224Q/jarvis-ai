@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<title>Jarvis AI · your free AI assistant</title>
+<meta name="description" content="Jarvis: a free AI assistant that runs in your browser with your own free Gemini key. Chat, code, build websites and games, read PDFs and videos, make and edit videos up to 5 minutes, practice exams.">
+<meta name="theme-color" content="#0b0d12">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta property="og:title" content="Jarvis AI">
+<meta property="og:description" content="Free AI assistant: chat, code, websites, games, sources, video maker & editor, exams.">
+<meta property="og:image" content="icons/og.png">
+<link rel="stylesheet" href="css/app.css">
+<link rel="modulepreload" href="js/chat.js">
+</head>
+<body data-view="chat">
+<div id="app">
+  <aside id="sidebar" aria-label="Sidebar">
+    <div class="brand"><img src="icons/icon.svg" alt="" width="30" height="30"><b>Jarvis</b><span class="brand-ai">AI</span></div>
+    <button class="btn primary block" id="newChatBtn">＋ New chat</button>
+    <nav class="nav" aria-label="Main">
+      <a class="nav-item" data-view="chat" href="#/chat">💬 Chat</a>
+      <a class="nav-item" data-view="video" href="#/video">🎬 Video Studio</a>
+      <a class="nav-item" data-view="exam" href="#/exam">📝 Exam Mode</a>
+      <a class="nav-item" data-view="connectors" href="#/connectors">🔌 Connectors</a>
+      <a class="nav-item" data-view="settings" href="#/settings">⚙️ Settings</a>
+    </nav>
+    <input type="search" id="chatSearch" placeholder="🔍 Search chats" aria-label="Search chats">
+    <div id="chatList" class="chat-list"></div>
+    <div class="side-foot">
+      <button class="btn tiny" id="themeBtn" title="Dark / light">🌓 Theme</button>
+      <button class="btn tiny" id="installBtn" style="display:none">📲 Install app</button>
+      <button class="btn tiny" id="helpInstall" title="Add to home screen">📲</button>
+    </div>
+  </aside>
+  <div id="scrim"></div>
+  <main id="main">
+    <header class="topbar">
+      <button class="icon-btn" id="menuBtn" aria-label="Open menu">☰</button>
+      <div class="top-title" id="topTitle">New chat</div>
+      <button class="model-chip" id="modelChip" title="Change model in Settings">Gemini</button>
+      <button class="icon-btn" id="topNewBtn" aria-label="New chat" title="New chat">✎</button>
+      <button class="icon-btn src-btn" id="srcBtn" aria-label="Sources" title="Sources for this chat">📚<span id="srcCount"></span></button>
+    </header>
+
+    <section id="view-chat" class="view on" aria-label="Chat">
+      <div id="messages" class="messages" aria-live="polite"></div>
+      <div class="composer-wrap">
+        <div id="voiceBar" class="voice-bar" style="display:none" role="status"><span id="voiceState">🎧 Voice chat on</span><button class="btn tiny" id="voiceStop">Stop voice</button></div>
+        <div id="pending" class="pending" style="display:none"></div>
+        <div class="composer">
+          <button class="icon-btn" id="plusBtn" aria-label="Attach or add" title="Attach files, sources, images, video">＋</button>
+          <textarea id="input" rows="1" placeholder="Message Jarvis…" aria-label="Message"></textarea>
+          <button class="icon-btn" id="micBtn" aria-label="Voice typing" title="Voice typing">🎤</button>
+          <button class="icon-btn" id="voiceModeBtn" aria-label="Voice chat" title="Hands-free voice chat">🎧</button>
+          <button class="send-btn" id="sendBtn" aria-label="Send message" disabled>➤</button>
+        </div>
+        <div class="composer-sub">
+          <select id="presetSel" aria-label="Mode"></select>
+          <button class="pill-btn" id="webBtn" title="Google Search grounding (needs a paid Gemini key on Gemini 3 models)">🌐 Web search on ✕</button>
+          <span class="muted tiny-text">Jarvis can make mistakes. Check important info.</span>
+        </div>
+      </div>
+    </section>
+    <section id="view-video" class="view" aria-label="Video Studio"></section>
+    <section id="view-exam" class="view" aria-label="Exam Mode"></section>
+    <section id="view-connectors" class="view" aria-label="Connectors"></section>
+    <section id="view-settings" class="view" aria-label="Settings"></section>
+  </main>
+  <aside id="sourcesPanel" class="sources-panel" aria-label="Sources">
+    <div class="sp-head"><b>📚 Sources</b><button class="icon-btn" id="srcClose" aria-label="Close sources">✕</button></div>
+    <p class="muted small">Jarvis answers using these in this chat.</p>
+    <div class="row wrap sp-add">
+      <button class="btn tiny" id="srcAddFile">📎 Files</button>
+      <button class="btn tiny" id="srcAddLink">🔗 Link / YouTube</button>
+      <button class="btn tiny" id="srcAddText">📝 Paste text</button>
+      <button class="btn tiny" id="srcAddGithub">🐙 GitHub</button>
+    </div>
+    <div id="srcList"></div>
+  </aside>
+</div>
+<noscript>Jarvis needs JavaScript.</noscript>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>

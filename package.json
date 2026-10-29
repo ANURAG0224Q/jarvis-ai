@@ -1,0 +1,12 @@
+{
+  "name": "jarvis-ai",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Free AI assistant in your browser (static site)",
+  "scripts": {
+    "test": "node --test test/unit.test.mjs",
+    "start": "python3 -m http.server 8000"
+  },
+  "license": "MIT"
+}
