@@ -1,7 +1,7 @@
 import { shouldShowIntro, runIntro } from './intro.js';
 // Jarvis AI: app shell, routing, theme, onboarding, PWA.
 import { $, $$, el, toast, modal } from './util.js';
-import { settings, saveSettings, onSettings, persist } from './store.js';
+import { settings, saveSettings, onSettings, persist, cleanKey } from './store.js';
 import { initChat, initSources, openChat, refreshList, closeSources, updateModelChip, renderAll } from './chat.js';
 import { renderSettings } from './settings.js';
 import { renderConnectors } from './connectors.js';
@@ -48,6 +48,7 @@ async function onboarding() {
   const s = settings();
   if (s.onboarded || s.geminiKey || sessionStorage.getItem('jarvis.mock') === '1') return;
   const key = el('input', { type: 'password', placeholder: 'Paste your key (AIza…)', autocomplete: 'off', id: 'obKey' });
+  key.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); key.closest('.modal')?.querySelector('.btn.primary')?.click(); } });
   const status = el('div', { class: 'small' });
   const content = el('div', { class: 'stack' },
     el('p', {}, 'Jarvis is your own free AI app. It runs in your browser using a free Google Gemini key, so you never pay for tokens.'),
@@ -56,7 +57,7 @@ async function onboarding() {
     el('p', { class: 'small muted' }, 'The key stays only on this device. On the free tier Google may use prompts to improve its products, so avoid private info.'));
   await modal({ title: '👋 Welcome to Jarvis', content, buttons: [
     { label: 'Later', value: 'later' },
-    { label: 'Save key', primary: true, value: () => { const k = key.value.trim(); if (k) { saveSettings({ geminiKey: k }); testGeminiKey(k).then(() => toast('✅ Key works! Say hi to Jarvis.')).catch((e) => toast('Key problem: ' + friendlyError(e), 'error', 7000)); } return 'save'; } },
+    { label: 'Save key', primary: true, value: () => { const k = cleanKey(key.value); if (k) { saveSettings({ geminiKey: k }); testGeminiKey(k).then(() => toast('✅ Key works! Say hi to Jarvis.')).catch((e) => toast('Key problem: ' + friendlyError(e), 'error', 7000)); } return 'save'; } },
   ] });
   saveSettings({ onboarded: true });
   renderAll();

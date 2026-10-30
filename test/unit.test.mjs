@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { rebalance, gradeLocal } from '../js/exam-core.js';
 import { parseCommand, extractActions, stripActions } from '../js/commands.js';
 import { normalizeDurations, planTiming } from '../js/video/timing.js';
+import { cleanKey } from '../js/store.js';
 
 const q = (marks, type = 'short') => ({ question: 'Q?', type, marks });
 
@@ -60,4 +61,12 @@ test('narration timing never exceeds the video length', () => {
   const p = planTiming(scenes, 15, [6, 6, 6]);
   assert.ok(Math.abs(p.durs.reduce((a, b) => a + b, 0) - 15) < 1e-6);
   assert.ok(p.rate >= 1 && p.rate <= 1.35);
+});
+
+test('cleanKey removes spaces, line breaks, invisible characters and quotes from pasted keys', () => {
+  assert.equal(cleanKey('  AIzaSy TEST\nKEY123 '), 'AIzaSyTESTKEY123');
+  assert.equal(cleanKey('"AIzaSyABC"'), 'AIzaSyABC');
+  assert.equal(cleanKey('AIza\u200BSy\tXYZ\r\n'), 'AIzaSyXYZ');
+  assert.equal(cleanKey('gsk_abc-DEF_123'), 'gsk_abc-DEF_123');
+  assert.equal(cleanKey(undefined), '');
 });

@@ -71,6 +71,8 @@ export function saveSettings(patch) {
   listeners.forEach((f) => { try { f(cache, patch); } catch (e) { console.error(e); } });
   return cache;
 }
+// API keys never contain spaces: remove spaces, line breaks, invisible characters and quotes picked up when copying.
+export function cleanKey(v) { return String(v == null ? '' : v).replace(/[\s\u200B-\u200D\u2060\uFEFF]+/g, '').replace(/^["'`<«“‘]+|["'`>»”’]+$/g, ''); }
 export function onSettings(f) { listeners.add(f); return () => listeners.delete(f); }
 export function resetSettings() { localStorage.removeItem(SKEY); cache = null; return settings(); }
 

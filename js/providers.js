@@ -1,5 +1,5 @@
 // AI providers. Everything runs in the browser with the user's own keys.
-import { settings, GEMINI_MODELS, FALLBACK_CHAIN } from './store.js';
+import { settings, GEMINI_MODELS, FALLBACK_CHAIN, cleanKey } from './store.js';
 import { blobToBase64, sleep } from './util.js';
 import { bumpUsage, markLimit, resetLabel } from './usage.js';
 
@@ -12,6 +12,7 @@ export class AIError extends Error {
 
 const isMock = () => !!(window.__JARVIS_MOCK || sessionStorage.getItem('jarvis.mock') === '1');
 export function geminiBase() { const b = (settings().geminiBase || '').trim().replace(/\/+$/, ''); return b || GEMINI_ORIGIN; }
+function isLocalBase() { const b = settings().geminiBase || ''; return /^https?:\/\/(127\.|localhost)/.test(b); }
 export function providerReady(p) {
   if (isMock()) return true;
   const s = settings();
@@ -26,7 +27,7 @@ export function activeModelLabel() {
   return s.customModel || 'custom';
 }
 
-function geminiHeaders(extra = {}) { return { 'content-type': 'application/json', 'x-goog-api-key': settings().geminiKey || '', ...extra }; }
+function geminiHeaders(extra = {}) { return { 'content-type': 'application/json', 'x-goog-api-key': cleanKey(settings().geminiKey), ...extra }; }
 
 async function parseError(res) {
   let raw = ''; try { raw = await res.text(); } catch {}
@@ -48,6 +49,7 @@ export function friendlyError(e) {
   if (e instanceof TypeError && /fetch|network/i.test(e.message)) return 'Network error: check your internet connection (or the endpoint URL in Settings).';
   switch (e.kind) {
     case 'bad-key': return 'Your API key was rejected. Open Settings and paste a valid key.';
+    case 'offline': return 'You’re offline. Check your internet connection, then tap Retry.';
     case 'all-limits': case 'all-busy': return e.friendly;
     case 'no-key': return e.message;
     case 'daily-limit': return `Daily free limit reached for this model. It resets at ${resetLabel()}. Turn on auto-switch in Settings, or add a free Groq key there for more.`;
@@ -116,6 +118,9 @@ export async function geminiUpload(blob, name, mime, { onProgress, signal } = {}
 
 // Convert neutral parts -> Gemini parts.
 // neutral part: {text} | {file:{blob,mime,name,kind,size,uri,uriExpires,ref}} | {youtube:url} | {link:url}
+// Google rejects a request whose inline files add up to more than about 20 MB, and that would break every later
+// message in the chat (old photos are sent again with each message). Past this budget, files go through the Files API.
+const INLINE_BUDGET = 12 * 1024 * 1024;
 async function toGeminiParts(parts, ctx) {
   const out = [];
   for (const p of parts) {
@@ -126,7 +131,8 @@ async function toGeminiParts(parts, ctx) {
       const f = p.file;
       if (f.uri && f.uriExpires && f.uriExpires > Date.now() + 60e3) { out.push({ fileData: { fileUri: f.uri, mimeType: f.mime } }); continue; }
       if (!f.blob) { out.push({ text: `[File ${f.name} is no longer available]` }); continue; }
-      if (f.blob.size <= INLINE_MAX) out.push({ inlineData: { mimeType: f.mime, data: await blobToBase64(f.blob) } });
+      ctx.inlineBytes = ctx.inlineBytes || 0;
+      if (f.blob.size <= INLINE_MAX && ctx.inlineBytes + f.blob.size <= INLINE_BUDGET) { ctx.inlineBytes += f.blob.size; out.push({ inlineData: { mimeType: f.mime, data: await blobToBase64(f.blob) } }); }
       else {
         ctx.onStatus && ctx.onStatus(`Uploading ${f.name} to Gemini…`);
         const up = await geminiUpload(f.blob, f.name, f.mime, { signal: ctx.signal });
@@ -184,8 +190,8 @@ async function geminiStreamOnce(model, body, { signal, onText, onThought, onChun
 // ---------- OpenAI-compatible (Groq, OpenRouter, custom) ----------
 function oaiConfig() {
   const s = settings();
-  if (s.provider === 'groq') return { base: 'https://api.groq.com/openai/v1', key: s.groqKey, model: s.groqModel };
-  if (s.provider === 'openrouter') return { base: 'https://openrouter.ai/api/v1', key: s.openrouterKey, model: s.openrouterModel, extra: { 'HTTP-Referer': location.origin, 'X-Title': 'Jarvis AI' } };
+  if (s.provider === 'groq') return { base: 'https://api.groq.com/openai/v1', key: cleanKey(s.groqKey), model: s.groqModel };
+  if (s.provider === 'openrouter') return { base: 'https://openrouter.ai/api/v1', key: cleanKey(s.openrouterKey), model: s.openrouterModel, extra: { 'HTTP-Referer': location.origin, 'X-Title': 'Jarvis AI' } };
   return { base: (s.customBase || '').replace(/\/+$/, ''), key: s.customKey, model: s.customModel };
 }
 async function toOaiContent(parts) {
@@ -277,8 +283,8 @@ export function buildRoutes(o = {}) {
 }
 function oaiCfgFor(r) {
   const s = settings();
-  if (r.p === 'groq') return { base: 'https://api.groq.com/openai/v1', key: s.groqKey, model: r.model };
-  if (r.p === 'openrouter') return { base: 'https://openrouter.ai/api/v1', key: s.openrouterKey, model: r.model, extra: { 'HTTP-Referer': location.origin, 'X-Title': 'Jarvis AI' } };
+  if (r.p === 'groq') return { base: 'https://api.groq.com/openai/v1', key: cleanKey(s.groqKey), model: r.model };
+  if (r.p === 'openrouter') return { base: 'https://openrouter.ai/api/v1', key: cleanKey(s.openrouterKey), model: r.model, extra: { 'HTTP-Referer': location.origin, 'X-Title': 'Jarvis AI' } };
   return { base: (s.customBase || '').replace(/\/+$/, ''), key: s.customKey, model: r.model };
 }
 const hasMedia = (turns) => turns.some((t) => t.parts.some((p) => p.youtube || (p.file && !['image', 'pdf'].includes(p.file.kind))));
@@ -322,6 +328,7 @@ export async function chat(turns, opts = {}) {
   if (isMock()) return mockChat(turns, o);
   let routes = buildRoutes(o);
   if (!routes.length) throw new AIError('Add your free Gemini API key in Settings first.', { kind: 'no-key' });
+  if (navigator.onLine === false && !isLocalBase()) throw new AIError('offline', { kind: 'offline' });
   // Files only Gemini can read (video, audio): keep Gemini routes first.
   if (hasMedia(turns) && routes.some((r) => r.p === 'gemini')) routes = [...routes.filter((r) => r.p === 'gemini'), ...routes.filter((r) => r.p !== 'gemini')];
   const notes = [];
@@ -396,6 +403,10 @@ export async function chat(turns, opts = {}) {
       }
     }
     errors.push({ route, err: lastErr });
+    // A rejected key is rejected for every model on that provider: don't walk the rest of its models.
+    if (lastErr && lastErr.kind === 'bad-key') routes = [...routes.slice(0, i + 1), ...routes.slice(i + 1).filter((r) => r.p !== route.p)];
+    // No internet: every other model would fail the same way.
+    if (lastErr instanceof TypeError && navigator.onLine === false) break;
     if (lastErr && lastErr.kind === 'daily-limit') { markExhausted(exKey(route), lastErr.retryIn); markLimit(exKey(route)); }
     const moveOn = lastErr && (['daily-limit', 'rate-limit', 'not-found', 'server', 'timeout', 'bad-key', 'forbidden'].includes(lastErr.kind) || lastErr instanceof TypeError || lastErr.status === 400 && route.p !== 'gemini');
     if (!moveOn) break;
@@ -425,6 +436,9 @@ function allFailedError(errors) {
   const last = errors.length ? errors[errors.length - 1].err : null;
   if (errors.length === 1 && last && !['daily-limit', 'rate-limit', 'server', 'timeout'].includes(last.kind)) return last;
   if (kinds.every((k) => k === 'bad-key')) return new AIError('key', { kind: 'bad-key' });
+  if (errors.length && errors.every((x) => x.err instanceof TypeError)) return navigator.onLine === false ? new AIError('offline', { kind: 'offline' }) : errors[errors.length - 1].err;
+  // The Gemini key itself was rejected (and any backups also failed): say so, the key is the thing to fix.
+  if (errors[0] && errors[0].err && errors[0].err.kind === 'bad-key' && errors[0].route.p === 'gemini') return errors[0].err;
   const more = !s.groqKey ? ' Add a free Groq key in Settings (AI model → Backup keys) for more chats today.' : !s.openrouterKey ? ' Add a free OpenRouter key in Settings (AI model → Backup keys) for more.' : '';
   if (kinds.includes('daily-limit') && kinds.every((k) => ['daily-limit', 'rate-limit', 'not-found', 'bad-key', 'forbidden'].includes(k)))
     return new AIError('limits', { kind: 'all-limits', friendly: `Daily free limit reached on all your free models. It resets at ${resetLabel()}.${more}` });
@@ -509,7 +523,7 @@ export function pcmToWav(pcmBytes, rate, ch) {
 
 // Validate a Gemini key quickly (lists models; costs no generation quota).
 export async function testGeminiKey(key, base) {
-  const res = await fetch(`${(base || '').replace(/\/+$/, '') || GEMINI_ORIGIN}/v1beta/models?pageSize=200`, { headers: { 'x-goog-api-key': key } });
+  const res = await fetch(`${(base || '').replace(/\/+$/, '') || GEMINI_ORIGIN}/v1beta/models?pageSize=200`, { headers: { 'x-goog-api-key': cleanKey(key) } });
   if (!res.ok) throw await parseError(res);
   const j = await res.json();
   return (j.models || []).filter((m) => (m.supportedGenerationMethods || []).includes('generateContent')).map((m) => m.name.replace('models/', ''));

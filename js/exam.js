@@ -15,9 +15,12 @@ let timerId = 0;
 async function history() { return (await kv.get('exams')) || []; }
 async function saveHistory(list) { await kv.put('exams', list.slice(-100)); }
 
+let genLabel = null; // progress text while a paper is being made (survives leaving and re-opening this screen)
+function setGen(label) { genLabel = label; const b = $('#exGenerate'); if (b) { b.disabled = !!label; b.textContent = label || '✨ Create exam'; } }
+
 export async function renderExam() {
   const root = $('#view-exam'); root.innerHTML = '';
-  if (exam && !exam.submitted) return drawTaking();
+  if (exam && !exam.submitted) { if (exam.pendingMinutes && document.body.dataset.view === 'exam') { exam.started = Date.now(); exam.deadline = Date.now() + exam.pendingMinutes * 60000; exam.pendingMinutes = 0; } return drawTaking(); }
   if (exam && exam.submitted) return drawResults();
   const saved = await kv.get('examCfg'); if (saved) cfg = { ...cfg, ...saved };
   root.append(el('div', { class: 'page' }, el('h1', {}, '📝 Exam Mode'),
@@ -52,10 +55,12 @@ function setupForm() {
     if (!cfg.subject && !cfg.topics.length && !files.length) return toast('Add a subject, topics or notes first', 'error');
     if (!cfg.types.length) return toast('Pick at least one question type', 'error');
     if (!providerReady()) { toast('Add your free Gemini API key in Settings first.', 'error'); return; }
-    go.disabled = true; go.textContent = '⏳ Making your paper…';
+    if (genLabel) return; // already making one (e.g. started, left this screen, came back)
+    setGen('⏳ Making your paper…');
     try { await generatePaper(); } catch (e) { toast(friendlyError(e), 'error', 8000); }
-    go.disabled = false; go.textContent = '✨ Create exam';
+    setGen(null);
   } }, '✨ Create exam');
+  if (genLabel) { go.disabled = true; go.textContent = genLabel; }
   return el('section', { class: 'card' }, el('h2', {}, 'New exam'),
     el('div', { class: 'row wrap' }, el('label', { class: 'field grow' }, 'Subject', subj), el('label', { class: 'field grow' }, 'Class / level', level)),
     el('label', { class: 'field' }, 'Topics', topicIn), chips,
@@ -105,10 +110,9 @@ Guidelines: MCQ 1–2 marks with exactly 4 options and "answer" = the index (0-3
   let j = null, lastErr = null;
   for (let attempt = 0; attempt < 2 && !j; attempt++) {
     try {
-      const st = $('#exGenerate');
       const r = await chat([{ role: 'user', parts }], { json: true, schema: SCHEMA, system: 'You are an expert examiner and teacher. Output only JSON.', showThinking: false, temperature: 0.7, maxTokens: 16000, maxMs: 240e3,
-        onModel: (m) => { if (st) st.textContent = `⏳ Writing your paper with ${m}…`; }, onStatus: (s) => { if (st) st.textContent = '⏳ ' + s; },
-        onText: (t) => { if (st) st.textContent = `⏳ Writing your paper… ${Math.round(t.length / 100) / 10}k characters`; } });
+        onModel: (m) => setGen(`⏳ Writing your paper with ${m}…`), onStatus: (s) => s && setGen('⏳ ' + s),
+        onText: (t) => setGen(`⏳ Writing your paper… ${Math.round(t.length / 100) / 10}k characters`) });
       let p = parseJSONLoose(r.text);
       if (p && !p.questions) { const inner = Object.values(p).find((v) => v && typeof v === 'object' && Array.isArray(v.questions)); if (inner) p = inner; }
       const qs = (p.questions || []).map((q) => ({ ...q, type: String(q.type || '').toLowerCase() })).filter((q) => validQuestion(q, cfg.types));
@@ -119,10 +123,14 @@ Guidelines: MCQ 1–2 marks with exactly 4 options and "answer" = the index (0-3
   if (!j) throw lastErr || new Error('Could not create the paper.');
   const before = j.questions.reduce((a, q) => a + (+q.marks || 0), 0);
   const questions = rebalance(j.questions, T).map((q) => ({ ...q, id: uid(), answer: q.type === 'mcq' ? +q.answer : q.answer }));
+  const here = document.body.dataset.view === 'exam';
   exam = { id: uid(), title: j.title || `${cfg.subject} test`, cfg: { ...cfg }, questions, answers: {}, flags: {}, time: {}, started: Date.now(), cur: 0, submitted: false,
-    deadline: cfg.minutes ? Date.now() + cfg.minutes * 60000 : 0, rebalanced: before !== T ? before : 0 };
+    deadline: cfg.minutes && here ? Date.now() + cfg.minutes * 60000 : 0, pendingMinutes: cfg.minutes && !here ? cfg.minutes : 0, rebalanced: before !== T ? before : 0 };
   window.__exam = exam;
+  setGen(null);
   renderExam();
+  // Made while the user was on another screen: tell them, and start the timer only when they open it.
+  if (!here) toast(el('span', {}, '📝 Your exam paper is ready. ', el('a', { class: 'btn primary tiny', href: '#/exam' }, 'Open it')), 'info', 15000);
 }
 
 // ---------- taking ----------

@@ -1,7 +1,7 @@
 // Free web search for Jarvis. Runs in the browser, no server.
 // 1) Tavily: works with NO key (keyless mode, rate-limited); a free key (1,000 searches/month, no card) raises the limit.
 // 2) Serper.dev (optional backup, Google results): 2,500 free searches with a free key, no card.
-import { settings } from './store.js';
+import { settings, cleanKey } from './store.js';
 import { bumpUsage } from './usage.js';
 
 export class SearchError extends Error { constructor(msg, { status = 0, kind = 'error' } = {}) { super(msg); this.status = status; this.kind = kind; } }
@@ -52,9 +52,9 @@ export async function webSearch(query, { signal } = {}) {
   if (isMock()) { const r = mockSearch(query); bumpUsage('search:mock'); return { ...r, notes: [] }; }
   const s = settings(); const notes = []; let last = null;
   const attempts = [];
-  attempts.push(['tavily', s.tavilyKey ? s.tavilyKey.trim() : '']);
+  attempts.push(['tavily', s.tavilyKey ? cleanKey(s.tavilyKey) : '']);
   if (s.tavilyKey) attempts.push(['tavily', '']); // key used up or wrong: keyless still works
-  if (s.serperKey) attempts.push(['serper', s.serperKey.trim()]);
+  if (s.serperKey) attempts.push(['serper', cleanKey(s.serperKey)]);
   for (const [p, key] of attempts) {
     try {
       const r = p === 'tavily' ? await tavily(query, { signal, key }) : await serper(query, { signal, key });

@@ -261,9 +261,24 @@ function renderPending() {
   }
   box.style.display = pending.length ? '' : 'none';
 }
+// Phone photos are often 3–10 MB: shrink big ones (max 2048 px, JPEG) so they upload fast on mobile data and
+// several photos in one chat stay under Google's request size limit. HEIC or anything the browser can't read is kept as is.
+export async function shrinkImage(f, maxSide = 2048, minBytes = 1.5e6) {
+  try {
+    if (!f || f.size < minBytes || !/^image\/(jpeg|png|webp|bmp)$/i.test(f.type || '')) return f;
+    const bmp = await createImageBitmap(f);
+    const s = Math.min(1, maxSide / Math.max(bmp.width, bmp.height));
+    const c = document.createElement('canvas'); c.width = Math.max(1, Math.round(bmp.width * s)); c.height = Math.max(1, Math.round(bmp.height * s));
+    const g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height); g.drawImage(bmp, 0, 0, c.width, c.height); bmp.close && bmp.close();
+    const b = await new Promise((res) => c.toBlob(res, 'image/jpeg', 0.85));
+    if (!b || b.size >= f.size) return f;
+    return new File([b], (f.name || 'photo').replace(/\.[^.]+$/, '') + '.jpg', { type: 'image/jpeg' });
+  } catch { return f; }
+}
 export async function addAttachments(files) {
-  for (const f of files) {
+  for (let f of files) {
     if (f.size > MAX_ATTACH) { toast(`${f.name} is over 50 MB, too big.`, 'error'); continue; }
+    f = await shrinkImage(f);
     const mime = guessMime(f.name, f.type);
     pending.push({ id: uid(), name: f.name || 'file', mime, size: f.size, kind: fileKind(f.name, mime), blob: f });
   }
@@ -371,13 +386,20 @@ async function buildTurns(uptoIdx) {
     }
   }
   // Merge consecutive same-role turns (APIs require alternation).
-  const merged = [];
+  let merged = [];
   for (const t of turns) { const last = merged[merged.length - 1]; if (last && last.role === t.role) last.parts.push(...t.parts); else merged.push(t); }
+  // Very long chats: send only the most recent part of the history, so the free per-minute token limit
+  // (and the model's input limit) isn't hit on every message. The full chat stays on screen and saved.
+  const size = (t) => t.parts.reduce((a, p) => a + (p.text ? p.text.length : p.file ? 6000 : 2000), 0);
+  let total = merged.slice(0, -1).reduce((a, t) => a + size(t), 0); historyTrimmed = 0; // the newest message (with its sources) always goes
+  while (merged.length > 1 && total > HISTORY_BUDGET_CHARS) { total -= size(merged[0]); merged.shift(); historyTrimmed++; if (merged[0] && merged[0].role === 'model') { total -= size(merged[0]); merged.shift(); historyTrimmed++; } }
   return merged;
 }
 
 let lock = false;
-let queued = null; // a message typed while Jarvis was still answering: sent right after
+const HISTORY_BUDGET_CHARS = 240e3; // ~60k tokens
+let historyTrimmed = 0;
+let queued = []; // messages typed while Jarvis was still answering: sent right after, in order
 export async function send(textOverride) {
   const input = $('#input');
   const text = String(textOverride ?? input.value).trim();
@@ -392,9 +414,9 @@ export async function send(textOverride) {
   }
   if (busy || lock) {
     if (pending.length) { toast('Jarvis is still answering. Send your files when it finishes (or tap ■ to stop).', 'info', 5000); return; }
-    queued = text;
+    queued.push(text);
     if (textOverride == null) { input.value = ''; autoGrow(); }
-    toast('⏳ Jarvis is still answering. Your message will send right after.', 'info', 5000);
+    toast(queued.length > 1 ? `⏳ Jarvis is still answering. Your ${queued.length} messages will send right after, in order.` : '⏳ Jarvis is still answering. Your message will send right after.', 'info', 5000);
     updateSendBtn(); return;
   }
   lock = true;
@@ -403,9 +425,10 @@ export async function send(textOverride) {
     console.error('send failed', e);
     busy = null;
     await localReply(null, null, 'Something went wrong on my side: ' + (e && e.message ? e.message : e) + '. Please tap Retry or send it again.').catch(() => toast('Something went wrong: ' + (e && e.message), 'error', 8000));
+    resumeVoice('Sorry, something went wrong. Please try again.');
   } finally { lock = false; updateSendBtn(); setTimeout(flushQueue, 250); }
 }
-function flushQueue() { if (queued && !busy && !lock) { const q = queued; queued = null; send(q); } }
+function flushQueue() { if (queued.length && !busy && !lock) send(queued.shift()); }
 
 /** Add a reply that doesn't need the AI (commands, "add your key", errors). Always visible. */
 async function localReply(userText, text, error = null, actions = null) {
@@ -428,6 +451,7 @@ async function sendInner(text) {
     if (pending.length) { pending = []; renderPending(); }
     input.value = ''; autoGrow(); updateSendBtn();
     await localReply(text, '', NO_KEY_MSG);
+    resumeVoice('I need your free Gemini key first. Tap Add free key, then try again.');
     return;
   }
   await ensureConv();
@@ -494,7 +518,7 @@ async function runModel(userIdx, existing = null) {
   const capMs = window.__JARVIS_FIRST_CAP_MS || FIRST_WORDS_CAP_MS;
   const capTimer = setTimeout(() => { if (!v.text) { gaveUp = true; ctrl.abort(); } }, capMs);
   try {
-    const turns = await buildTurns(userIdx);
+    const turns = await buildTurns(userIdx); const trimmedNow = historyTrimmed;
     const webOn = $('#webBtn').classList.contains('on');
     const searchNotes = [];
     if (webOn && !settings().googleGrounding) {
@@ -523,11 +547,13 @@ async function runModel(userIdx, existing = null) {
       onUploaded: (f) => { if (f.ref) { f.ref.uri = f.uri; f.ref.uriExpires = f.uriExpires; } },
     });
     v.text = r.text; v.thoughts = r.thoughts || v.thoughts; v.model = r.model || v.model; v.notes = [...searchNotes, ...(r.notes || [])]; v.grounding = r.grounding || null;
+    if (trimmedNow) v.notes.push('This chat is very long, so only the most recent messages were sent to the AI. Start a new chat (✎) for a fresh topic.');
     if (r.finish === 'MAX_TOKENS') v.notes.push('The answer hit the length limit. Say "continue" to get the rest.');
   } catch (e) {
     if (gaveUp && !v.text) v.error = `The free AI didn’t answer in ${capMs >= 120e3 ? Math.round(capMs / 60000) + ' minutes' : Math.round(capMs / 1000) + ' seconds'} (its servers are slow or busy right now). Tap Retry, or try again in a few minutes.`;
     else if (e && e.name === 'AbortError') { v.stopped = true; if (!v.text) v.text = ''; }
     else { console.warn('AI error', e); let fe = ''; try { fe = friendlyError(e); } catch {} v.error = fe || ('Something went wrong: ' + (e && e.message ? e.message : e)); }
+    if (v.error && !v.text) v.model = ''; // no model answered: don't show the last one tried as if it had
   } finally {
     clearInterval(tick); clearTimeout(capTimer);
     if (raf) cancelAnimationFrame(raf);
@@ -538,10 +564,17 @@ async function runModel(userIdx, existing = null) {
     refreshList();
     const acts = extractActions(v.text || '');
     if (acts.length && !v.stopped) tryOpen(acts[0]);
-    if (voiceMode && v.text) { setVoice('speaking'); speak(stripActions(v.text), null, () => { if (voiceMode) startListening(true); }); } else if (voiceMode) startListening(true);
-    else setTimeout(startWake, 800);
+    if (voiceMode && v.text) { setVoice('speaking'); speak(stripActions(v.text), null, () => { if (voiceMode) startListening(true); }); }
+    else resumeVoice(v.error ? 'Sorry. ' + v.error : ''); // voice chat never goes quiet on an error
     setTimeout(flushQueue, 300);
   }
+}
+// After a reply that didn't come from the AI (or an error): keep voice chat going, or go back to listening for "Hey Jarvis".
+function resumeVoice(say) {
+  if (voiceMode) {
+    if (say) { setVoice('speaking'); speak(say, null, () => { if (voiceMode) startListening(true); }); }
+    else startListening(true);
+  } else setTimeout(startWake, 800);
 }
 export function stop() { if (busy) busy.ctrl.abort(); }
 
@@ -567,7 +600,7 @@ async function runCommand(text, cmd) {
 }
 
 async function regenerate(m) {
-  if (busy) return;
+  if (busy || lock) return toast('Jarvis is still answering. Wait a moment, or tap ■ to stop it first.', 'info', 4000);
   const idx = conv.messages.indexOf(m);
   const userIdx = conv.messages.slice(0, idx).map((x) => x.role).lastIndexOf('user');
   if (userIdx < 0) return;
@@ -576,7 +609,7 @@ async function regenerate(m) {
   await runModel(userIdx, m);
 }
 async function editMessage(m) {
-  if (busy) return;
+  if (busy || lock) return toast('Jarvis is still answering. Wait a moment, or tap ■ to stop it first.', 'info', 4000);
   const t = await prompt('Edit message', m.text, { multiline: true, okLabel: 'Save & resend' });
   if (t == null || !t.trim()) return;
   const idx = conv.messages.indexOf(m);
@@ -586,7 +619,7 @@ async function editMessage(m) {
   await runModel(idx);
 }
 async function deleteMessage(m) {
-  if (busy) return;
+  if (busy || lock) return toast('Jarvis is still answering. Wait a moment, or tap ■ to stop it first.', 'info', 4000);
   const idx = conv.messages.indexOf(m);
   // Deleting a question also deletes its answer.
   const n = m.role === 'user' && conv.messages[idx + 1]?.role === 'model' ? 2 : 1;
@@ -798,8 +831,9 @@ export async function addSource(src) {
   await save(); renderSources(); setTitle(); refreshList();
 }
 export async function addFileSources(files) {
-  for (const f of files) {
+  for (let f of files) {
     if (f.size > MAX_ATTACH) { toast(`${f.name} is over 50 MB.`, 'error'); continue; }
+    f = await shrinkImage(f);
     const mime = guessMime(f.name, f.type); const kind = fileKind(f.name, mime);
     const blobId = 'b_' + uid(); await blobs.put(blobId, f);
     await addSource({ type: 'file', name: f.name, mime, kind, size: f.size, blobId });

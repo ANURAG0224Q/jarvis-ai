@@ -1,5 +1,5 @@
 import { $, el, toast, confirm, download, pickFiles, uid, fmtBytes, modal, prompt } from './util.js';
-import { settings, saveSettings, GEMINI_MODELS, GEMINI_VOICES, GROQ_MODELS, convs, blobs, usage, resetSettings } from './store.js';
+import { settings, saveSettings, GEMINI_MODELS, GEMINI_VOICES, GROQ_MODELS, convs, blobs, usage, resetSettings, cleanKey } from './store.js';
 import { testGeminiKey, openRouterFreeModels, friendlyError, geminiTTS, modelLabel } from './providers.js';
 import { usageToday, resetLabel, resetUsage } from './usage.js';
 import { PRESETS } from './presets.js';
@@ -8,7 +8,7 @@ import { runIntro } from './intro.js';
 import { refreshList } from './chat.js';
 import { blobToBase64, base64ToBlob } from './util.js';
 
-export const APP_VERSION = '1.1.0';
+export const APP_VERSION = '1.1.2';
 
 function field(label, input, help) { return el('label', { class: 'field' }, el('span', { class: 'flabel' }, label), input, help ? el('small', { class: 'muted' }, help) : null); }
 function toggle(key, label, help) {
@@ -23,7 +23,10 @@ function bindInput(input, key, transform = (v) => v) {
 }
 function keyInput(key, placeholder) {
   const i = el('input', { type: 'password', placeholder, autocomplete: 'off', spellcheck: 'false', id: 'set-' + key });
-  bindInput(i, key, (v) => v.trim());
+  bindInput(i, key, cleanKey);
+  // Save as soon as a key is pasted (not only when the field loses focus), and show the cleaned key.
+  i.addEventListener('input', () => { const k = cleanKey(i.value); if (k !== (settings()[key] || '')) saveSettings({ [key]: k }); });
+  i.addEventListener('change', () => { const k = cleanKey(i.value); if (i.value !== k) i.value = k; });
   const eye = el('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Show or hide key', onclick: () => { i.type = i.type === 'password' ? 'text' : 'password'; } }, '👁');
   return el('div', { class: 'key-row' }, i, eye);
 }
@@ -63,7 +66,7 @@ export function renderSettings() {
       field('Gemini API key', keyInput('geminiKey', 'AIza…'), 'Stored only in this browser. It is sent only to Google.'),
       el('div', { class: 'row' }, testBtn, status),
       field('Model', modelSel, 'Gemini 3.8 Flash is the smartest free model but allows only about 20 messages a day. Flash-Lite models allow about 500.'),
-      toggle('autoFallback', 'Auto-switch model when a limit is hit', 'Tries 3.8 Flash → 3.6 Flash → 3.5 Flash-Lite → 3.1 Flash-Lite → Gemma 4, then your backup keys below, so chat keeps working all day.'),
+      toggle('autoFallback', 'Auto-switch model when a limit is hit', 'Tries 3.8 Flash → 3.6 Flash → 3 Flash (preview) → 3.5 Flash-Lite → 3.1 Flash-Lite → Gemma 4, then your backup keys below, so chat keeps working all day.'),
       el('details', { class: 'adv', id: 'backupKeys' }, el('summary', {}, 'Backup keys (free, optional): more chats per day'),
         el('p', { class: 'small muted' }, 'When every free Gemini model hits its daily limit, Jarvis switches to these. Both are free with no card.'),
         field('Groq API key', keyInput('groqKey', 'gsk_…'), el('span', {}, 'Free at ', el('a', { href: 'https://console.groq.com/keys', target: '_blank', rel: 'noopener' }, 'console.groq.com/keys'), ': very fast, about 1,000 requests/day per model.')),
