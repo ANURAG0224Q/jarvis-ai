@@ -1,5 +1,5 @@
 // AI providers. Everything runs in the browser with the user's own keys.
-import { settings, GEMINI_MODELS } from './store.js';
+import { settings, GEMINI_MODELS, FALLBACK_CHAIN } from './store.js';
 import { blobToBase64, sleep } from './util.js';
 import { bumpUsage, markLimit, resetLabel } from './usage.js';
 
@@ -265,7 +265,7 @@ export function buildRoutes(o = {}) {
   const s = settings();
   if (o.model) return [{ p: 'gemini', model: o.model }];
   const lists = {
-    gemini: (s.geminiKey || s.geminiBase) ? [s.model, ...(s.autoFallback ? s.fallbackChain : [])] : [],
+    gemini: (s.geminiKey || s.geminiBase) ? [s.model, ...(s.autoFallback ? FALLBACK_CHAIN : [])] : [],
     groq: s.groqKey ? [s.groqModel, ...(s.autoFallback ? GROQ_BACKUPS : [])] : [],
     openrouter: s.openrouterKey ? [s.openrouterModel] : [],
     custom: s.customBase && s.customModel ? [s.customModel] : [],
@@ -369,6 +369,10 @@ export async function chat(turns, opts = {}) {
       } catch (e) {
         if (e.name === 'AbortError' && !(e instanceof AIError)) throw e;
         lastErr = e;
+        // The connection or Google's stream broke mid-answer (not a slow model): start this answer over once,
+        // so a half-written game or code block isn't left cut off.
+        const broke = e.partial && !retried && !e.looped && e.message !== 'The model stopped responding.' && (e.kind === 'server' || e.kind === 'error' || e.kind === 'rate-limit' || e instanceof TypeError);
+        if (broke) { retried = true; o.onText && o.onText(''); o.onStatus && o.onStatus('Connection dropped mid-answer, starting the answer again…'); await sleep(1200); continue; }
         // Text already on screen: keep it instead of starting over with another model.
         if (e.partial && e.partial.length > 200) return { text: e.partial, thoughts: '', model: route.p === 'gemini' ? route.model : modelLabel(route), notes: [...notes, 'The model stopped mid-answer. Say "continue" for the rest.'] };
         if (route.p === 'gemini') {

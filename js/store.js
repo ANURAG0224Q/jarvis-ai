@@ -10,6 +10,8 @@ export const GEMINI_MODELS = [
   { id: 'gemma-4-31b-it', label: 'Gemma 4 31B', note: 'Open model · free' },
   { id: 'gemma-4-26b-a4b-it', label: 'Gemma 4 26B', note: 'Open model · free' },
 ];
+// Free models tried in order when one hits its daily limit (always the current list, not a copy saved in old settings).
+export const FALLBACK_CHAIN = ['gemini-3.8-flash', 'gemini-3.6-flash', 'gemini-3-flash-preview', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite', 'gemma-4-26b-a4b-it', 'gemma-4-31b-it'];
 export const GEMINI_TTS_MODELS = ['gemini-3.8-flash-tts', 'gemini-3.8-flash-lite-tts', 'gemini-3.1-flash-tts-preview'];
 export const GEMINI_VOICES = ['Kore', 'Puck', 'Charon', 'Fenrir', 'Aoede', 'Leda', 'Orus', 'Zephyr', 'Callirrhoe', 'Enceladus', 'Iapetus', 'Umbriel', 'Algieba', 'Despina', 'Erinome', 'Achernar', 'Gacrux', 'Sadachbia', 'Sulafat'];
 export const GROQ_MODELS = ['openai/gpt-oss-120b', 'llama-3.3-70b-versatile', 'qwen/qwen3.8-27b', 'openai/gpt-oss-20b', 'llama-3.1-8b-instant'];
@@ -19,7 +21,7 @@ export const DEFAULTS = {
   geminiKey: '', groqKey: '', openrouterKey: '', customKey: '',
   model: 'gemini-3.8-flash',
   autoFallback: true,              // on daily-limit errors, try the next free Gemini model
-  fallbackChain: ['gemini-3.8-flash', 'gemini-3.6-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite', 'gemma-4-26b-a4b-it', 'gemma-4-31b-it'],
+  fallbackChain: FALLBACK_CHAIN,
   groqModel: 'openai/gpt-oss-120b',
   webSearch: false,                // 🌐 search the web before answering (Tavily, free)
   tavilyKey: '', serperKey: '',

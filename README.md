@@ -80,7 +80,7 @@ Gemini is the default (free). In Settings you can also use **Groq**, **OpenRoute
 ## Free limits and how Jarvis stays free all day
 Google's free tier gives roughly **20 requests/day** on the best Flash models and **~500/day** on Flash-Lite, and resets at midnight Pacific time (12:30 PM IST, or 1:30 PM IST in winter). Jarvis handles this for you:
 
-- **Auto-switch:** when a model hits its daily limit, its per-minute limit, a server error or stops responding, Jarvis moves to the next one: 3.8 Flash → 3.6 Flash → 3.5 Flash-Lite → 3.1 Flash-Lite → Gemma 4 → your backup keys. You see one small note like *“Switched to Gemma 4 26B (daily free limit reached: Gemini 3.8 Flash)”*.
+- **Auto-switch:** when a model hits its daily limit, its per-minute limit, a server error or stops responding, Jarvis moves to the next one: 3.8 Flash → 3.6 Flash → 3 Flash (preview) → 3.5 Flash-Lite → 3.1 Flash-Lite → Gemma 4 → your backup keys. If Google's connection drops in the middle of an answer, Jarvis starts that answer again once, so code and games don't come out cut off. You see one small note like *“Switched to Gemma 4 26B (daily free limit reached: Gemini 3.8 Flash)”*.
 - **Slow models:** if a model doesn't start answering in time, Jarvis retries once and then moves on.
 - **Backup keys (optional, free, no card):** Settings → AI model → *Backup keys*. A free **Groq** key ([console.groq.com/keys](https://console.groq.com/keys)) adds about 1,000 requests/day per model; a free **OpenRouter** key adds about 50/day.
 - **When everything is used up** you get a friendly message with the reset time, never a raw error.
