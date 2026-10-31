@@ -8,6 +8,7 @@ import { openPreview } from './preview.js';
 import { BASE_SYSTEM, PRESETS, presetById, SUGGESTIONS } from './presets.js';
 import { pushDialog, github } from './github.js';
 import { parseCommand, openTab, extractActions, stripActions } from './commands.js';
+import { looksLikeIntro, tryChatUnlock, hasPassword, requireOwner, WELCOME, OWNER_FIRST } from './owner.js';
 
 let conv = null;           // current conversation object
 let busy = null;           // {ctrl, msgId}
@@ -404,6 +405,19 @@ export async function send(textOverride) {
   const input = $('#input');
   const text = String(textOverride ?? input.value).trim();
   if (!text && !pending.length) return;
+  // "My name is <owner>" unlocks the owner lock, answered here (never sent to the AI, never saved as typed).
+  if (!pending.length && looksLikeIntro(text)) {
+    let r = null; try { r = await tryChatUnlock(text); } catch (e) { console.warn('owner check', e); }
+    if (r) {
+      if (textOverride == null) { input.value = ''; autoGrow(); updateSendBtn(); }
+      const tail = hasPassword() ? '' : ' Tip: set an owner password in Settings → Owner lock.';
+      const say = r === 'already' ? `You're already unlocked, ${OWNER_FIRST} sir. I've kept owner mode on for another 30 minutes.` : `${WELCOME} Owner mode is unlocked for 30 minutes: you can change Settings now.${tail}`;
+      try { await localReply('🔑 Owner unlock', say); } catch (e) { toast(say, 'info', 6000); }
+      if (voiceMode) { setVoice('speaking'); speak(r === 'already' ? `You're already unlocked, ${OWNER_FIRST} sir.` : `${WELCOME} Owner mode unlocked.`, null, () => voiceMode && startListening(true)); }
+      else setTimeout(startWake, 800);
+      return;
+    }
+  }
   // Simple "open youtube"-type commands run instantly, never wait for the AI (even while it is answering).
   let cmd = null;
   try { cmd = !pending.length && parseCommand(text); } catch (e) { console.warn('command parse', e); }
@@ -626,6 +640,7 @@ async function deleteMessage(m) {
   conv.messages.splice(idx, n); await save(); renderMessages();
 }
 async function remember(text) {
+  if (!(await requireOwner())) return;
   const t = await prompt('Save to memory', text.slice(0, 300), { multiline: true, okLabel: 'Remember' });
   if (!t || !t.trim()) return;
   saveSettings({ memory: [...(settings().memory || []), { id: uid(), text: t.trim() }] });

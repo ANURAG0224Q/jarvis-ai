@@ -65,7 +65,11 @@ export function settings() {
   }
   return cache;
 }
+let writeGuard = null;
+/** The owner lock registers a guard: a change it refuses is not saved. */
+export function setWriteGuard(f) { writeGuard = f; }
 export function saveSettings(patch) {
+  if (writeGuard && !writeGuard(patch || {})) return settings();
   cache = { ...settings(), ...patch };
   try { localStorage.setItem(SKEY, JSON.stringify(cache)); } catch (e) { console.warn('settings not saved', e); }
   listeners.forEach((f) => { try { f(cache, patch); } catch (e) { console.error(e); } });

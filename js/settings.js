@@ -8,7 +8,30 @@ import { runIntro } from './intro.js';
 import { refreshList } from './chat.js';
 import { blobToBase64, base64ToBlob } from './util.js';
 
-export const APP_VERSION = '1.1.2';
+import { isUnlocked, hasPassword, lockNow, unlockDialog, passwordDialog, requireOwner, onOwnerChange, ownerLabel, unlockLeftMin } from './owner.js';
+
+export const APP_VERSION = '1.2.0';
+
+// Lock or unlock while Settings is open: redraw it.
+onOwnerChange(() => { if (/^#\/settings/.test(location.hash)) renderSettings(); });
+
+function ownerCard() {
+  const on = isUnlocked(), pw = hasPassword();
+  const card = el('section', { class: 'card owner-card' + (on ? ' open' : ''), id: 'ownerCard' }, el('h2', {}, on ? '🔓 Owner mode' : '🔒 Owner lock'),
+    el('p', { id: 'ownerName' }, el('b', {}, 'Owner: '), ownerLabel()));
+  if (on) {
+    card.append(el('p', { class: 'small' }, `Unlocked. You can change settings now. Locks again in ${unlockLeftMin()} min, when you reload, or when you tap Lock now.`));
+    if (!pw) card.append(el('p', { class: 'small nudge', id: 'ownerNudge' }, '⚠️ No owner password yet. Set one so only you (or someone who knows your full name) can change settings.'));
+    card.append(el('div', { class: 'row wrap' },
+      el('button', { class: 'btn' + (pw ? '' : ' primary'), id: 'ownerSetPw', onclick: () => passwordDialog() }, pw ? '🔑 Change owner password' : '🔑 Set owner password'),
+      el('button', { class: 'btn', id: 'ownerLockNow', onclick: () => { lockNow(); toast('🔒 Locked'); } }, '🔒 Lock now')));
+  } else {
+    card.append(el('p', { class: 'small' }, 'Settings are locked: only the owner can change them. Chat, Exam Mode, videos and “open YouTube” work for everyone.'),
+      el('p', { class: 'small muted' }, pw ? 'Unlock with the owner password or the owner’s full name. Owners can also just say or type “My name is …” in chat.' : 'No owner password is set yet. The owner can unlock with their full name, then set a password.'),
+      el('div', { class: 'row' }, el('button', { class: 'btn primary', id: 'ownerUnlock', onclick: () => unlockDialog() }, '🔓 Unlock')));
+  }
+  return card;
+}
 
 function field(label, input, help) { return el('label', { class: 'field' }, el('span', { class: 'flabel' }, label), input, help ? el('small', { class: 'muted' }, help) : null); }
 function toggle(key, label, help) {
@@ -246,17 +269,25 @@ export function renderSettings() {
     el('div', { class: 'row wrap' },
       el('button', { class: 'btn', onclick: exportAll }, '⬇ Export all chats'),
       el('button', { class: 'btn', onclick: importAll }, '⬆ Import chats'),
-      el('button', { class: 'btn danger', onclick: async () => { if (await confirm('Delete all chats?', 'All chats, sources and files saved in Jarvis on this device will be deleted. Settings and keys stay.')) { await convs.clear(); await blobs.clear(); refreshList(); location.hash = '#/chat'; toast('All chats deleted'); } } }, '🗑 Delete all chats'),
-      el('button', { class: 'btn danger', onclick: async () => { if (await confirm('Reset settings?', 'Keys, memory and preferences will be removed from this browser.', 'Reset')) { resetSettings(); location.reload(); } } }, 'Reset settings')),
+      el('button', { class: 'btn danger', onclick: async () => { if (!(await requireOwner())) return; if (await confirm('Delete all chats?', 'All chats, sources and files saved in Jarvis on this device will be deleted. Settings and keys stay.')) { await convs.clear(); await blobs.clear(); refreshList(); location.hash = '#/chat'; toast('All chats deleted'); } } }, '🗑 Delete all chats'),
+      el('button', { class: 'btn danger', onclick: async () => { if (!(await requireOwner())) return; if (await confirm('Reset settings?', 'Keys, memory and preferences will be removed from this browser.', 'Reset')) { resetSettings(); location.reload(); } } }, 'Reset settings')),
     use));
 
   wrap.append(section('ℹ️ About',
+    el('p', {}, el('b', {}, 'Owner: '), ownerLabel()),
     el('p', {}, `Jarvis AI v${APP_VERSION}: a free, open-source AI app that runs entirely in your browser with your own free API key.`),
     el('ul', { class: 'small' },
       el('li', {}, 'Free limits come from Google (or Groq/OpenRouter), not from Jarvis. They can change.'),
       el('li', {}, 'Images are made with the free Pollinations.ai service. Web pages are read with the free r.jina.ai reader.'),
       el('li', {}, 'Video Studio renders videos on your device. It makes animated explainer videos and edits your own clips; it does not generate realistic AI footage (that needs paid models).')),
     el('p', {}, el('a', { href: 'https://github.com/ANURAG0224Q/jarvis-ai', target: '_blank', rel: 'noopener' }, 'Source code on GitHub'))));
+  // Owner lock: everything between the title and About needs the owner while locked.
+  const kids = [...wrap.children], about = kids[kids.length - 1];
+  const area = el('div', { class: 'lock-area', id: 'lockArea' }); kids.slice(1, -1).forEach((k) => area.append(k));
+  const locked = !isUnlocked();
+  const lockWrap = el('div', { class: 'lock-wrap' + (locked ? ' locked' : '') }, area);
+  if (locked) { area.inert = true; area.setAttribute('aria-hidden', 'true'); lockWrap.append(el('button', { class: 'lock-cover', id: 'lockCover', 'aria-label': 'Settings are locked. Tap to unlock.', onclick: () => unlockDialog() })); }
+  wrap.insertBefore(ownerCard(), about); wrap.insertBefore(lockWrap, about);
   root.append(wrap);
 }
 

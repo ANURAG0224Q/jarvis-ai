@@ -350,3 +350,8 @@ body:not([data-view=chat]) .src-btn,body:not([data-view=chat]) .model-chip,body:
 
 /* free usage table */
 table.usage{width:100%;border-collapse:collapse;font-size:13px;margin:6px 0}table.usage th,table.usage td{text-align:left;padding:6px 4px;border-bottom:1px solid var(--line,#2a2f3a)}table.usage td:nth-child(2){font-variant-numeric:tabular-nums}
+
+/* owner lock */
+.owner-card.open{border-color:var(--ok)}.owner-card .nudge{background:rgba(245,158,11,.12);border:1px solid var(--warn);border-radius:10px;padding:8px 10px}
+.lock-wrap{position:relative}.lock-wrap.locked .lock-area{opacity:.5;filter:grayscale(.4);user-select:none}
+.lock-cover{position:absolute;inset:0;z-index:2;width:100%;border:0;margin:0;padding:0;background:transparent;cursor:pointer}
