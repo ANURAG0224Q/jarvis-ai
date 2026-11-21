@@ -1,4 +1,4 @@
-# Jarvis AI 🤖
+# CODING BUDDY 🤖
 
 > **Note:** This project was made by AI for educational purposes. It was not made by me (ANURAG).
 
