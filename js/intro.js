@@ -73,7 +73,7 @@ export function runIntro() {
     later(async () => {
       box.classList.add('booted');
       if (!s.greetVoiceOn) { start(); return; }
-      if (sessionStorage.getItem('CODING BUDDY.introSeen') === '1') {
+      if (sessionStorage.getItem('JARVIS.introSeen') === '1') {
         // later launch in this session: try to speak straight away; fall back to the button if sound is blocked
         try {
           started = true; box.classList.add('speaking'); typeOut(text);
@@ -82,7 +82,7 @@ export function runIntro() {
           later(finish, 9000);
         } catch { started = false; box.classList.remove('speaking'); box.classList.add('ready'); say.textContent = ''; }
       } else box.classList.add('ready');
-      sessionStorage.setItem('CODING BUDDY.introSeen', '1');
+      sessionStorage.setItem('JARVIS.introSeen', '1');
     }, T);
   });
 }
